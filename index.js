@@ -166,7 +166,7 @@ For regular responses, be conversational, helpful, and concise.`;
         role: 'user',
         content: [
           { type: 'text', text: imagePrompt },
-          { type: 'image_url', image_url: { url: imageData } }
+          { type: 'image_url', image_url: { url: imageData, detail: 'high' } }
         ]
       };
       console.log(`Sending image to OpenAI with prompt: "${imagePrompt}"`);
@@ -184,7 +184,7 @@ For regular responses, be conversational, helpful, and concise.`;
         const completion = await openai.chat.completions.create({
           model: 'gpt-4o-mini', // Cost-effective model
           messages: messages,
-          max_tokens: 1000,
+          max_tokens: 2000, // Increased for table extraction
           temperature: 0.7
         });
 
