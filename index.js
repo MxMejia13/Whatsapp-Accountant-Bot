@@ -132,12 +132,19 @@ app.post('/webhook', async (req, res) => {
     const needsChart = /\b(chart|graph|visualize|plot)\b/i.test(incomingMsg);
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
+    // Detect user identity for custom greetings
+    const userPhone = from.replace('whatsapp:', '');
+    const isOwner = userPhone === '+18093833443';
+    const userTitle = isOwner ? 'Sr. Mejia' : '';
+
     // Build conversation context for OpenAI
-    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.
+    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}
 
 IMPORTANT: You have access to the full conversation history with this user. You CAN and SHOULD reference previous messages, images, data, and context from earlier in the conversation. When users ask about "earlier", "before", "the previous image", etc., use the conversation history to answer accurately.
 
-When users ask for TABLES (tabla, table, cuadro, relación, spreadsheet), respond with JSON:
+YOU CAN CREATE IMAGES: You have the ability to generate table images and chart images. When users ask for these, you MUST respond with the JSON format below.
+
+When users ask for TABLES (tabla, table, cuadro, relación, spreadsheet, "tabla en imagen", "create a table"), you MUST respond ONLY with this JSON format:
 {
   "type": "table",
   "title": "Table Title",
@@ -296,17 +303,25 @@ For regular responses, be conversational, helpful, and concise.`;
       });
     } else if (needsImage && !visualData) {
       // For image requests, inform about limitation
+      let message = aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)';
+      if (message.length > 1600) {
+        message = message.substring(0, 1597) + '...';
+      }
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
-        body: aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)'
+        body: message
       });
     } else {
-      // Send regular text response
+      // Send regular text response (truncate if too long for WhatsApp)
+      let message = aiResponse;
+      if (message.length > 1600) {
+        message = message.substring(0, 1597) + '...';
+      }
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
-        body: aiResponse
+        body: message
       });
     }
 
