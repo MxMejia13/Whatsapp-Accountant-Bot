@@ -6,6 +6,12 @@ const { toFile } = require('openai/uploads');
 const axios = require('axios');
 const { generateChart, generateTable } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
+const {
+  scheduleRecurringMessage,
+  scheduleOneTimeMessage,
+  cancelScheduledMessage,
+  listScheduledMessages
+} = require('./utils/scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +36,67 @@ const conversationHistory = new Map();
 
 // Store generated charts temporarily (chartId -> buffer)
 const chartStorage = new Map();
+
+// Helper function: Split long messages into chunks
+function splitMessage(message, maxLength = 1500) {
+  if (message.length <= maxLength) {
+    return [message];
+  }
+
+  const chunks = [];
+  let currentChunk = '';
+  const paragraphs = message.split('\n');
+
+  for (const paragraph of paragraphs) {
+    if ((currentChunk + '\n' + paragraph).length > maxLength) {
+      if (currentChunk) {
+        chunks.push(currentChunk.trim());
+        currentChunk = paragraph;
+      } else {
+        // Paragraph itself is too long, split by sentences
+        const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
+        for (const sentence of sentences) {
+          if ((currentChunk + ' ' + sentence).length > maxLength) {
+            if (currentChunk) chunks.push(currentChunk.trim());
+            currentChunk = sentence;
+          } else {
+            currentChunk += ' ' + sentence;
+          }
+        }
+      }
+    } else {
+      currentChunk += (currentChunk ? '\n' : '') + paragraph;
+    }
+  }
+
+  if (currentChunk) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks;
+}
+
+// Helper function: Send message(s) with automatic splitting
+async function sendWhatsAppMessage(to, body) {
+  const chunks = splitMessage(body);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const message = chunks.length > 1
+      ? `(${i + 1}/${chunks.length})\n\n${chunks[i]}`
+      : chunks[i];
+
+    await twilioClient.messages.create({
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: to,
+      body: message
+    });
+
+    // Small delay between messages to maintain order
+    if (i < chunks.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+}
 
 // Webhook endpoint for incoming WhatsApp messages
 app.post('/webhook', async (req, res) => {
@@ -161,6 +228,18 @@ When users say "previous message", "that data", "los datos anteriores", "informa
 - Quote the EXACT data you previously mentioned
 - DO NOT say you don't have access - the conversation history is RIGHT THERE above
 - DO NOT ask them to specify - YOU CAN SEE what data you mentioned before
+
+POLL-STYLE QUESTIONS:
+When you need user input or choices, create numbered options:
+Example:
+"Which time works best for you?
+1️⃣ Morning (9 AM - 12 PM)
+2️⃣ Afternoon (1 PM - 5 PM)
+3️⃣ Evening (6 PM - 9 PM)
+
+Reply with 1, 2, or 3"
+
+When users reply with just a number (1, 2, 3, etc.), check if your previous message was a poll/question and interpret their number as their choice from that list.
 
 YOU CAN CREATE IMAGES:
 You have the ability to generate table images and chart images. When users request these, respond with JSON.
@@ -342,26 +421,11 @@ For regular responses, be conversational, helpful, and concise.`;
       });
     } else if (needsImage && !visualData) {
       // For image requests, inform about limitation
-      let message = aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)';
-      if (message.length > 1600) {
-        message = message.substring(0, 1597) + '...';
-      }
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from,
-        body: message
-      });
+      const message = aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)';
+      await sendWhatsAppMessage(from, message);
     } else {
-      // Send regular text response (truncate if too long for WhatsApp)
-      let message = aiResponse;
-      if (message.length > 1600) {
-        message = message.substring(0, 1597) + '...';
-      }
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from,
-        body: message
-      });
+      // Send regular text response with automatic splitting
+      await sendWhatsAppMessage(from, aiResponse);
     }
 
     res.status(200).send('OK');
@@ -400,8 +464,73 @@ app.get('/status', (req, res) => {
   });
 });
 
+// Scheduled Messages API Endpoints
+// Schedule a recurring message
+app.post('/api/schedule/recurring', (req, res) => {
+  try {
+    const { jobId, cronExpression, phoneNumber, message } = req.body;
+
+    if (!jobId || !cronExpression || !phoneNumber || !message) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const job = scheduleRecurringMessage(
+      jobId,
+      cronExpression,
+      sendWhatsAppMessage,
+      `whatsapp:${phoneNumber}`,
+      message
+    );
+
+    res.json({ success: true, job });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Schedule a one-time message
+app.post('/api/schedule/once', (req, res) => {
+  try {
+    const { jobId, sendAt, phoneNumber, message } = req.body;
+
+    if (!jobId || !sendAt || !phoneNumber || !message) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const job = scheduleOneTimeMessage(
+      jobId,
+      new Date(sendAt),
+      sendWhatsAppMessage,
+      `whatsapp:${phoneNumber}`,
+      message
+    );
+
+    res.json({ success: true, job });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cancel a scheduled message
+app.delete('/api/schedule/:jobId', (req, res) => {
+  const success = cancelScheduledMessage(req.params.jobId);
+
+  if (success) {
+    res.json({ success: true, message: 'Job cancelled' });
+  } else {
+    res.status(404).json({ error: 'Job not found' });
+  }
+});
+
+// List all scheduled messages
+app.get('/api/schedule', (req, res) => {
+  const jobs = listScheduledMessages();
+  res.json({ jobs });
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Webhook URL: http://localhost:${PORT}/webhook`);
+  console.log(`Scheduler API: http://localhost:${PORT}/api/schedule`);
 });
 
