@@ -35,6 +35,13 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`Received message from ${from}: ${incomingMsg}`);
 
+    // Ignore messages from the bot itself (sandbox number)
+    if (from === process.env.TWILIO_WHATSAPP_NUMBER) {
+      console.log('Ignoring message from bot itself');
+      res.status(200).send('OK');
+      return;
+    }
+
     // Get or initialize conversation history
     if (!conversationHistory.has(from)) {
       conversationHistory.set(from, []);
