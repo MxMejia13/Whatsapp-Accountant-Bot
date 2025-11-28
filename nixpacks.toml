@@ -1,11 +1,8 @@
 [phases.setup]
-nixPkgs = ['nodejs', 'python3']
+nixPkgs = ['nodejs_20', 'python3']
 
 [phases.install]
-cmds = ['npm install']
-
-[phases.build]
-cmds = []
+cmds = ['npm ci --prefer-offline --no-audit']
 
 [start]
 cmd = 'npm start'
