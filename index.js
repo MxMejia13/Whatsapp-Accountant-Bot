@@ -41,11 +41,13 @@ app.post('/webhook', async (req, res) => {
     }
     const history = conversationHistory.get(from);
 
-    // Add user message to history
-    history.push({
-      role: 'user',
-      content: incomingMsg
-    });
+    // Add user message to history (only if content exists)
+    if (incomingMsg && incomingMsg.trim()) {
+      history.push({
+        role: 'user',
+        content: incomingMsg
+      });
+    }
 
     // Keep only last 10 messages to manage token usage
     if (history.length > 20) {
@@ -76,10 +78,12 @@ For regular responses, just provide helpful text answers. Be concise and profess
     // Format conversation history for OpenAI
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content
-      }))
+      ...history
+        .filter(msg => msg.content && msg.content.trim()) // Filter out null/empty messages
+        .map(msg => ({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        }))
     ];
 
     // Get AI response from OpenAI with retry logic
@@ -125,27 +129,20 @@ For regular responses, just provide helpful text answers. Be concise and profess
       }
     }
 
-    // If all retries failed, send fallback response
+    // If all retries failed, log error and return
     if (!aiResponse) {
       console.error('All OpenAI API retries failed:', lastError);
-
-      aiResponse = "I'm having trouble connecting to my AI service right now. Please try again in a moment.";
-
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from,
-        body: aiResponse
-      });
-
-      res.status(200).send('OK');
+      res.status(500).send('AI service error');
       return;
     }
 
-    // Add AI response to history
-    history.push({
-      role: 'assistant',
-      content: aiResponse
-    });
+    // Add AI response to history (only if content exists)
+    if (aiResponse && aiResponse.trim()) {
+      history.push({
+        role: 'assistant',
+        content: aiResponse
+      });
+    }
 
     // Check if response contains chart data
     let chartData = null;
