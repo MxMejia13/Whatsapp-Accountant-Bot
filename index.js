@@ -14,7 +14,10 @@ app.use(express.json());
 
 // Initialize Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+// Using gemini-1.5-flash-latest with the v1beta API
+const model = genAI.getGenerativeModel({
+  model: 'gemini-1.5-flash-latest',
+});
 
 // Twilio client
 const twilioClient = twilio(
