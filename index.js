@@ -161,13 +161,16 @@ For regular responses, be conversational, helpful, and concise.`;
     // Add current image to the last user message if present
     if (imageData && messages.length > 1) {
       const lastUserMsgIndex = messages.length - 1;
+      const imagePrompt = userContent || 'Analyze this image and describe what you see in detail.';
       messages[lastUserMsgIndex] = {
         role: 'user',
         content: [
-          { type: 'text', text: userContent || 'What do you see in this image?' },
+          { type: 'text', text: imagePrompt },
           { type: 'image_url', image_url: { url: imageData } }
         ]
       };
+      console.log(`Sending image to OpenAI with prompt: "${imagePrompt}"`);
+      console.log(`Image data length: ${imageData.length} chars`);
     }
 
     // Get AI response from OpenAI with retry logic
@@ -186,6 +189,7 @@ For regular responses, be conversational, helpful, and concise.`;
         });
 
         aiResponse = completion.choices[0].message.content;
+        console.log(`OpenAI response received: ${aiResponse.substring(0, 100)}...`);
         break; // Success, exit retry loop
       } catch (openaiError) {
         lastError = openaiError;
