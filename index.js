@@ -199,19 +199,21 @@ Chart types: bar, line, pie
 CRITICAL: When users send images and ask you to extract or read the data:
 - Read ALL text and numbers EXACTLY as they appear in the image
 - Write the data in CLEAR, WELL-FORMATTED TEXT (not JSON, not table image)
-- Use line breaks and spacing to make it easy to read
-- Include column headers if it's a table
-- List every row with all its values
+- Format data for WhatsApp (line breaks, bullet points, numbered lists)
+- DO NOT use pipes or tables - WhatsApp doesn't preserve spacing
 - Maintain exact values, don't round or approximate
 - DO NOT automatically create a table image - only create images when explicitly asked
 
-Example of good data extraction:
-"The image contains the following data:
+Example of good data extraction for WhatsApp:
+"📊 Data from the image:
 
-Name | Age | City
-Juan | 25 | Santo Domingo
-Maria | 30 | Santiago
-Pedro | 28 | La Romana"
+*Column headers:* Name, Age, City
+
+1. Juan - 25 - Santo Domingo
+2. Maria - 30 - Santiago
+3. Pedro - 28 - La Romana
+
+Total: 3 rows"
 
 For regular responses, be conversational, helpful, and concise.`;
 
