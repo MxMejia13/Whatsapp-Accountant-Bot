@@ -28,6 +28,9 @@ const twilioClient = twilio(
 // Store conversation context (in production, use a database)
 const conversationHistory = new Map();
 
+// Store generated charts temporarily (chartId -> buffer)
+const chartStorage = new Map();
+
 // Webhook endpoint for incoming WhatsApp messages
 app.post('/webhook', async (req, res) => {
   try {
@@ -247,11 +250,25 @@ For regular responses, be conversational, helpful, and concise.`;
       // Generate and send chart image
       const chartBuffer = await generateChart(chartData);
 
+      // Generate unique chart ID and store
+      const chartId = `chart_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      chartStorage.set(chartId, chartBuffer);
+
+      // Clean up old charts after 10 minutes
+      setTimeout(() => chartStorage.delete(chartId), 10 * 60 * 1000);
+
+      // Get public URL (Railway provides RAILWAY_PUBLIC_DOMAIN env var)
+      const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || `${req.hostname}`;
+      const protocol = req.protocol || 'https';
+      const chartUrl = `${protocol}://${publicDomain}/charts/${chartId}`;
+
+      console.log(`Generated chart: ${chartUrl}`);
+
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
         body: chartData.message || 'Here\'s your data visualization:',
-        mediaUrl: [`data:image/png;base64,${chartBuffer.toString('base64')}`]
+        mediaUrl: [chartUrl]
       });
     } else if (needsImage && !chartData) {
       // For image requests, inform about limitation
@@ -274,6 +291,21 @@ For regular responses, be conversational, helpful, and concise.`;
     console.error('Error processing message:', error);
     res.status(500).send('Error processing message');
   }
+});
+
+// Endpoint to serve generated charts
+app.get('/charts/:chartId', (req, res) => {
+  const chartId = req.params.chartId;
+  const chartBuffer = chartStorage.get(chartId);
+
+  if (!chartBuffer) {
+    res.status(404).send('Chart not found');
+    return;
+  }
+
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
+  res.send(chartBuffer);
 });
 
 // Health check endpoint

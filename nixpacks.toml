@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ['nodejs_20', 'python3']
+nixPkgs = ['nodejs_20', 'python3', 'fontconfig', 'cairo', 'pango']
 
 [phases.install]
 cmds = ['npm ci --prefer-offline --no-audit']
