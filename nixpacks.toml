@@ -2,7 +2,7 @@
 nixPkgs = ['nodejs_20', 'python3', 'fontconfig', 'cairo', 'pango']
 
 [phases.install]
-cmds = ['npm ci --prefer-offline --no-audit']
+cmds = ['npm install --prefer-offline --no-audit']
 
 [start]
 cmd = 'npm start'
