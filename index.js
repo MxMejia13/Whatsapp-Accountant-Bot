@@ -51,18 +51,38 @@ app.post('/webhook', async (req, res) => {
     let transcribedText = null;
     let imageData = null;
 
+    let mediaBuffer = null;
+
     if (numMedia > 0) {
       mediaUrl = req.body.MediaUrl0;
       mediaType = req.body.MediaContentType0;
       console.log(`Media received: ${mediaType} at ${mediaUrl}`);
 
-      // Download media file
-      const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
-      const mediaResponse = await axios.get(mediaUrl, {
-        headers: { 'Authorization': `Basic ${auth}` },
-        responseType: 'arraybuffer'
-      });
-      const mediaBuffer = Buffer.from(mediaResponse.data);
+      try {
+        // Download media file using Twilio credentials
+        const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+        const mediaResponse = await axios.get(mediaUrl, {
+          headers: { 'Authorization': `Basic ${auth}` },
+          responseType: 'arraybuffer',
+          maxRedirects: 5,
+          timeout: 10000
+        });
+        mediaBuffer = Buffer.from(mediaResponse.data);
+        console.log(`Media downloaded successfully: ${mediaBuffer.length} bytes`);
+      } catch (downloadError) {
+        console.error('Media download failed:', {
+          message: downloadError.message,
+          status: downloadError.response?.status,
+          url: mediaUrl
+        });
+        // Continue without media if download fails
+        mediaUrl = null;
+        mediaType = null;
+      }
+    }
+
+    // Only process media if download succeeded
+    if (mediaBuffer && mediaType) {
 
       // Handle audio files - transcribe with Whisper
       if (mediaType && mediaType.startsWith('audio/')) {
