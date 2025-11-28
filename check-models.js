@@ -28,7 +28,8 @@ async function testModels() {
       console.log(`   Response: ${text.substring(0, 50)}...\n`);
     } catch (error) {
       console.log(`❌ FAILED: ${modelName}`);
-      console.log(`   Error: ${error.message.substring(0, 100)}...\n`);
+      console.log(`   Error: ${error.message}`);
+      console.log(`   Status: ${error.status}\n`);
     }
   }
 }
