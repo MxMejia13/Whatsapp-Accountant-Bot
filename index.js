@@ -134,8 +134,13 @@ app.post('/webhook', async (req, res) => {
 
     // Detect user identity for custom greetings
     const userPhone = from.replace('whatsapp:', '');
-    const isOwner = userPhone === '+18093833443';
-    const userTitle = isOwner ? 'Sr. Mejia' : '';
+    const userTitles = {
+      '+18093833443': 'Sr. Mejia',
+      '+18096510177': 'Sr. Max',
+      '+18293803443': 'Sr. Sebastian',
+      '+18098903565': 'Sr. Vinicio Alfredo'
+    };
+    const userTitle = userTitles[userPhone] || '';
 
     // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}
@@ -191,11 +196,22 @@ When users ask for CHARTS (gráfica, chart, graph, visualize, plot), respond wit
 
 Chart types: bar, line, pie
 
-CRITICAL: When extracting data from images:
-- Read ALL text and numbers EXACTLY as they appear
-- Maintain the exact values, don't round or approximate
-- Preserve the structure and all rows/columns
-- Extract EVERY cell accurately
+CRITICAL: When users send images and ask you to extract or read the data:
+- Read ALL text and numbers EXACTLY as they appear in the image
+- Write the data in CLEAR, WELL-FORMATTED TEXT (not JSON, not table image)
+- Use line breaks and spacing to make it easy to read
+- Include column headers if it's a table
+- List every row with all its values
+- Maintain exact values, don't round or approximate
+- DO NOT automatically create a table image - only create images when explicitly asked
+
+Example of good data extraction:
+"The image contains the following data:
+
+Name | Age | City
+Juan | 25 | Santo Domingo
+Maria | 30 | Santiago
+Pedro | 28 | La Romana"
 
 For regular responses, be conversational, helpful, and concise.`;
 
