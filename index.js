@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const twilio = require('twilio');
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { generateChart } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
 
@@ -12,10 +12,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Initialize Google Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
 // Twilio client
 const twilioClient = twilio(
@@ -56,13 +55,8 @@ app.post('/webhook', async (req, res) => {
     const needsChart = /table|chart|graph|data|visualize|show.*data/i.test(incomingMsg);
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
-    // Get AI response
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a helpful WhatsApp accountant bot. You assist with financial queries, calculations, expense tracking, and data analysis.
+    // Build conversation context for Gemini
+    const systemPrompt = `You are a helpful WhatsApp accountant bot. You assist with financial queries, calculations, expense tracking, and data analysis.
 
 If the user asks for data in a table or chart format, structure your response as JSON with the following format:
 {
@@ -76,15 +70,18 @@ If the user asks for data in a table or chart format, structure your response as
   "message": "Brief explanation"
 }
 
-For regular responses, just provide helpful text answers. Be concise and professional.`
-        },
-        ...history
-      ],
-      temperature: 0.7,
-      max_tokens: 1000
+For regular responses, just provide helpful text answers. Be concise and professional.`;
+
+    // Format conversation history for Gemini
+    let conversationContext = systemPrompt + '\n\n';
+    history.forEach(msg => {
+      conversationContext += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n\n`;
     });
 
-    const aiResponse = completion.choices[0].message.content;
+    // Get AI response from Gemini
+    const result = await model.generateContent(conversationContext);
+    const response = await result.response;
+    const aiResponse = response.text();
 
     // Add AI response to history
     history.push({
