@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const twilio = require('twilio');
 const OpenAI = require('openai');
+const { toFile } = require('openai/uploads');
 const axios = require('axios');
 const { generateChart } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
@@ -66,9 +67,10 @@ app.post('/webhook', async (req, res) => {
       // Handle audio files - transcribe with Whisper
       if (mediaType && mediaType.startsWith('audio/')) {
         console.log('Transcribing audio...');
-        const audioFile = new File([mediaBuffer], 'audio.ogg', { type: mediaType });
+        // Create a Blob-like object for Node.js
+        const audioBlob = new Blob([mediaBuffer], { type: mediaType });
         const transcription = await openai.audio.transcriptions.create({
-          file: audioFile,
+          file: await toFile(audioBlob, 'audio.ogg'),
           model: 'whisper-1'
         });
         transcribedText = transcription.text;
