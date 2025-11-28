@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const twilio = require('twilio');
 const OpenAI = require('openai');
+const axios = require('axios');
 const { generateChart } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
 
@@ -32,8 +33,9 @@ app.post('/webhook', async (req, res) => {
     const incomingMsg = req.body.Body;
     const from = req.body.From;
     const messageId = req.body.MessageSid;
+    const numMedia = parseInt(req.body.NumMedia) || 0;
 
-    console.log(`Received message from ${from}: ${incomingMsg}`);
+    console.log(`Received message from ${from}: ${incomingMsg} (${numMedia} media)`);
 
     // Ignore messages from the bot itself (sandbox number)
     if (from === process.env.TWILIO_WHATSAPP_NUMBER) {
@@ -42,17 +44,57 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Handle media (images and audio)
+    let mediaUrl = null;
+    let mediaType = null;
+    let transcribedText = null;
+    let imageData = null;
+
+    if (numMedia > 0) {
+      mediaUrl = req.body.MediaUrl0;
+      mediaType = req.body.MediaContentType0;
+      console.log(`Media received: ${mediaType} at ${mediaUrl}`);
+
+      // Download media file
+      const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+      const mediaResponse = await axios.get(mediaUrl, {
+        headers: { 'Authorization': `Basic ${auth}` },
+        responseType: 'arraybuffer'
+      });
+      const mediaBuffer = Buffer.from(mediaResponse.data);
+
+      // Handle audio files - transcribe with Whisper
+      if (mediaType && mediaType.startsWith('audio/')) {
+        console.log('Transcribing audio...');
+        const audioFile = new File([mediaBuffer], 'audio.ogg', { type: mediaType });
+        const transcription = await openai.audio.transcriptions.create({
+          file: audioFile,
+          model: 'whisper-1'
+        });
+        transcribedText = transcription.text;
+        console.log(`Transcribed: ${transcribedText}`);
+      }
+
+      // Handle images - prepare for vision analysis
+      if (mediaType && mediaType.startsWith('image/')) {
+        console.log('Image received for analysis');
+        imageData = `data:${mediaType};base64,${mediaBuffer.toString('base64')}`;
+      }
+    }
+
     // Get or initialize conversation history
     if (!conversationHistory.has(from)) {
       conversationHistory.set(from, []);
     }
     const history = conversationHistory.get(from);
 
-    // Add user message to history (only if content exists)
-    if (incomingMsg && incomingMsg.trim()) {
+    // Add user message to history (including transcribed audio)
+    const userContent = transcribedText || incomingMsg || '';
+    if (userContent && userContent.trim()) {
       history.push({
         role: 'user',
-        content: incomingMsg
+        content: userContent,
+        hasImage: !!imageData
       });
     }
 
@@ -68,7 +110,20 @@ app.post('/webhook', async (req, res) => {
     // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.
 
-Be conversational, helpful, and concise. Keep responses brief and easy to read on mobile devices.`;
+When users ask for data visualization (charts, graphs, tables), respond with JSON in this exact format:
+{
+  "type": "chart",
+  "chartType": "bar",
+  "title": "Chart Title",
+  "data": {
+    "labels": ["Jan", "Feb", "Mar"],
+    "values": [100, 200, 150]
+  },
+  "message": "Here's your chart showing..."
+}
+
+Chart types: bar, line, pie
+For regular responses, be conversational, helpful, and concise.`;
 
     // Format conversation history for OpenAI
     const messages = [
@@ -80,6 +135,18 @@ Be conversational, helpful, and concise. Keep responses brief and easy to read o
           content: msg.content
         }))
     ];
+
+    // Add current image to the last user message if present
+    if (imageData && messages.length > 1) {
+      const lastUserMsgIndex = messages.length - 1;
+      messages[lastUserMsgIndex] = {
+        role: 'user',
+        content: [
+          { type: 'text', text: userContent || 'What do you see in this image?' },
+          { type: 'image_url', image_url: { url: imageData } }
+        ]
+      };
+    }
 
     // Get AI response from OpenAI with retry logic
     let aiResponse;
