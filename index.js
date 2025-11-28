@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const twilio = require('twilio');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require('openai');
 const { generateChart } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
 
@@ -12,11 +12,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// Initialize Google Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Try gemini-1.5-flash - available on free tier
-const model = genAI.getGenerativeModel({
-  model: 'gemini-1.5-flash',
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 // Twilio client
@@ -58,7 +56,7 @@ app.post('/webhook', async (req, res) => {
     const needsChart = /table|chart|graph|data|visualize|show.*data/i.test(incomingMsg);
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
-    // Build conversation context for Gemini
+    // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp accountant bot. You assist with financial queries, calculations, expense tracking, and data analysis.
 
 If the user asks for data in a table or chart format, structure your response as JSON with the following format:
@@ -75,13 +73,16 @@ If the user asks for data in a table or chart format, structure your response as
 
 For regular responses, just provide helpful text answers. Be concise and professional.`;
 
-    // Format conversation history for Gemini
-    let conversationContext = systemPrompt + '\n\n';
-    history.forEach(msg => {
-      conversationContext += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n\n`;
-    });
+    // Format conversation history for OpenAI
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content
+      }))
+    ];
 
-    // Get AI response from Gemini with retry logic
+    // Get AI response from OpenAI with retry logic
     let aiResponse;
     const maxRetries = 3;
     let retryCount = 0;
@@ -89,24 +90,27 @@ For regular responses, just provide helpful text answers. Be concise and profess
 
     while (retryCount <= maxRetries) {
       try {
-        const result = await model.generateContent(conversationContext);
-        const response = await result.response;
-        aiResponse = response.text();
-        break; // Success, exit retry loop
-      } catch (geminiError) {
-        lastError = geminiError;
-
-        console.error(`Gemini API Error (attempt ${retryCount + 1}/${maxRetries + 1}):`, {
-          message: geminiError.message,
-          status: geminiError.status,
-          statusText: geminiError.statusText
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini', // Cost-effective model
+          messages: messages,
+          max_tokens: 1000,
+          temperature: 0.7
         });
 
-        // Retry on 400 errors or network issues
-        const shouldRetry = geminiError.status === 400 ||
-                           geminiError.status === 429 ||
-                           geminiError.status === 503 ||
-                           geminiError.message?.includes('fetch');
+        aiResponse = completion.choices[0].message.content;
+        break; // Success, exit retry loop
+      } catch (openaiError) {
+        lastError = openaiError;
+
+        console.error(`OpenAI API Error (attempt ${retryCount + 1}/${maxRetries + 1}):`, {
+          message: openaiError.message,
+          status: openaiError.status
+        });
+
+        // Retry on rate limit or server errors
+        const shouldRetry = openaiError.status === 429 ||
+                           openaiError.status === 500 ||
+                           openaiError.status === 503;
 
         if (shouldRetry && retryCount < maxRetries) {
           // Exponential backoff: 1s, 2s, 4s
@@ -123,7 +127,7 @@ For regular responses, just provide helpful text answers. Be concise and profess
 
     // If all retries failed, send fallback response
     if (!aiResponse) {
-      console.error('All Gemini API retries failed:', lastError);
+      console.error('All OpenAI API retries failed:', lastError);
 
       aiResponse = "I'm having trouble connecting to my AI service right now. Please try again in a moment.";
 
