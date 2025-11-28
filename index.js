@@ -182,7 +182,7 @@ For regular responses, be conversational, helpful, and concise.`;
     while (retryCount <= maxRetries) {
       try {
         const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini', // Cost-effective model
+          model: 'gpt-4o', // Full model for better vision capabilities
           messages: messages,
           max_tokens: 2000, // Increased for table extraction
           temperature: 0.7
