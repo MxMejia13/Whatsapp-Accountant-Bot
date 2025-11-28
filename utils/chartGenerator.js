@@ -1,4 +1,5 @@
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const { createCanvas } = require('canvas');
 
 const width = 800;
 const height = 600;
@@ -87,47 +88,97 @@ async function generateChart(chartData) {
 }
 
 /**
- * Generate a simple table image
+ * Generate a spreadsheet-style table image
  * @param {Object} tableData - Table data with headers and rows
  * @returns {Buffer} PNG image buffer
  */
 async function generateTable(tableData) {
   const { headers, rows, title } = tableData;
 
-  // Use chart.js to create a simple table visualization
-  // For better tables, consider using HTML to canvas conversion
-  const canvas = createCanvas(800, 600);
+  // Calculate dimensions based on content
+  const numCols = headers.length;
+  const numRows = rows.length;
+  const cellWidth = 150;
+  const cellHeight = 35;
+  const padding = 10;
+  const headerHeight = 40;
+  const titleHeight = title ? 60 : 20;
+
+  const canvasWidth = Math.max(800, numCols * cellWidth + padding * 2);
+  const canvasHeight = titleHeight + headerHeight + (numRows * cellHeight) + padding * 2;
+
+  const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
   // White background
   ctx.fillStyle = 'white';
-  ctx.fillRect(0, 0, 800, 600);
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   // Draw title
-  ctx.fillStyle = 'black';
-  ctx.font = 'bold 24px Arial';
-  ctx.fillText(title || 'Table', 20, 40);
+  if (title) {
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(title, canvasWidth / 2, 40);
+  }
 
-  // Simple table rendering (basic implementation)
-  let y = 80;
-  const cellHeight = 30;
-  const cellWidth = 150;
+  const startX = padding;
+  const startY = titleHeight;
 
-  // Draw headers
+  // Draw header row with background
+  ctx.fillStyle = '#4A90E2';
+  ctx.fillRect(startX, startY, numCols * cellWidth, headerHeight);
+
+  // Draw header text
+  ctx.fillStyle = 'white';
   ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
   headers.forEach((header, i) => {
-    ctx.fillText(header, 20 + (i * cellWidth), y);
+    const x = startX + (i * cellWidth) + (cellWidth / 2);
+    const y = startY + (headerHeight / 2) + 5;
+    ctx.fillText(String(header), x, y);
   });
 
-  // Draw rows
-  ctx.font = '12px Arial';
-  y += cellHeight;
+  // Draw data rows with alternating colors
+  ctx.textAlign = 'center';
+  ctx.font = '13px Arial';
   rows.forEach((row, rowIndex) => {
+    const y = startY + headerHeight + (rowIndex * cellHeight);
+
+    // Alternating row colors
+    ctx.fillStyle = rowIndex % 2 === 0 ? '#f8f9fa' : 'white';
+    ctx.fillRect(startX, y, numCols * cellWidth, cellHeight);
+
+    // Draw cell text
+    ctx.fillStyle = '#333';
     row.forEach((cell, cellIndex) => {
-      ctx.fillText(String(cell), 20 + (cellIndex * cellWidth), y);
+      const x = startX + (cellIndex * cellWidth) + (cellWidth / 2);
+      const textY = y + (cellHeight / 2) + 5;
+      ctx.fillText(String(cell), x, textY);
     });
-    y += cellHeight;
   });
+
+  // Draw grid lines
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 1;
+
+  // Vertical lines
+  for (let i = 0; i <= numCols; i++) {
+    const x = startX + (i * cellWidth);
+    ctx.beginPath();
+    ctx.moveTo(x, startY);
+    ctx.lineTo(x, startY + headerHeight + (numRows * cellHeight));
+    ctx.stroke();
+  }
+
+  // Horizontal lines
+  for (let i = 0; i <= numRows + 1; i++) {
+    const y = startY + (i === 0 ? 0 : headerHeight + ((i - 1) * cellHeight));
+    ctx.beginPath();
+    ctx.moveTo(startX, y);
+    ctx.lineTo(startX + (numCols * cellWidth), y);
+    ctx.stroke();
+  }
 
   return canvas.toBuffer('image/png');
 }

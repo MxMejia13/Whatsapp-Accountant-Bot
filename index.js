@@ -4,7 +4,7 @@ const twilio = require('twilio');
 const OpenAI = require('openai');
 const { toFile } = require('openai/uploads');
 const axios = require('axios');
-const { generateChart } = require('./utils/chartGenerator');
+const { generateChart, generateTable } = require('./utils/chartGenerator');
 const { generateImage } = require('./utils/imageGenerator');
 
 const app = express();
@@ -129,13 +129,25 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Determine if request needs visual output
-    const needsChart = /table|chart|graph|data|visualize|show.*data/i.test(incomingMsg);
+    const needsChart = /\b(chart|graph|visualize|plot)\b/i.test(incomingMsg);
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
     // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.
 
-When users ask for data visualization (charts, graphs, tables), respond with JSON in this exact format:
+When users ask for TABLES (tabla, table, cuadro, relación, spreadsheet), respond with JSON:
+{
+  "type": "table",
+  "title": "Table Title",
+  "headers": ["Column1", "Column2", "Column3"],
+  "rows": [
+    ["Data1", "Data2", "Data3"],
+    ["Data4", "Data5", "Data6"]
+  ],
+  "message": "Here's your table with the data..."
+}
+
+When users ask for CHARTS (gráfica, chart, graph, visualize, plot), respond with JSON:
 {
   "type": "chart",
   "chartType": "bar",
@@ -148,6 +160,13 @@ When users ask for data visualization (charts, graphs, tables), respond with JSO
 }
 
 Chart types: bar, line, pie
+
+CRITICAL: When extracting data from images:
+- Read ALL text and numbers EXACTLY as they appear
+- Maintain the exact values, don't round or approximate
+- Preserve the structure and all rows/columns
+- If there's a table in the image, extract EVERY cell accurately
+
 For regular responses, be conversational, helpful, and concise.`;
 
     // Format conversation history for OpenAI
@@ -235,42 +254,45 @@ For regular responses, be conversational, helpful, and concise.`;
       });
     }
 
-    // Check if response contains chart data
-    let chartData = null;
+    // Check if response contains visualization data (table or chart)
+    let visualData = null;
     try {
-      if (aiResponse.includes('"type":"chart"') || aiResponse.includes('"type": "chart"')) {
-        chartData = JSON.parse(aiResponse.match(/\{[\s\S]*\}/)[0]);
+      if (aiResponse.includes('"type"') && (aiResponse.includes('"table"') || aiResponse.includes('"chart"'))) {
+        visualData = JSON.parse(aiResponse.match(/\{[\s\S]*\}/)[0]);
       }
     } catch (e) {
       // Not JSON, treat as regular text
     }
 
     // Send response
-    if (chartData) {
-      // Generate and send chart image
-      const chartBuffer = await generateChart(chartData);
+    if (visualData) {
+      // Generate appropriate visualization
+      const isTable = visualData.type === 'table';
+      const imageBuffer = isTable
+        ? await generateTable(visualData)
+        : await generateChart(visualData);
 
-      // Generate unique chart ID and store
-      const chartId = `chart_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      chartStorage.set(chartId, chartBuffer);
+      // Generate unique ID and store
+      const visualId = `visual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      chartStorage.set(visualId, imageBuffer);
 
-      // Clean up old charts after 10 minutes
-      setTimeout(() => chartStorage.delete(chartId), 10 * 60 * 1000);
+      // Clean up old images after 10 minutes
+      setTimeout(() => chartStorage.delete(visualId), 10 * 60 * 1000);
 
       // Get public URL (Railway provides RAILWAY_PUBLIC_DOMAIN env var)
       const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || `${req.hostname}`;
       const protocol = req.protocol || 'https';
-      const chartUrl = `${protocol}://${publicDomain}/charts/${chartId}`;
+      const visualUrl = `${protocol}://${publicDomain}/charts/${visualId}`;
 
-      console.log(`Generated chart: ${chartUrl}`);
+      console.log(`Generated ${isTable ? 'table' : 'chart'}: ${visualUrl}`);
 
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
-        body: chartData.message || 'Here\'s your data visualization:',
-        mediaUrl: [chartUrl]
+        body: visualData.message || `Here's your ${isTable ? 'table' : 'chart'}:`,
+        mediaUrl: [visualUrl]
       });
-    } else if (needsImage && !chartData) {
+    } else if (needsImage && !visualData) {
       // For image requests, inform about limitation
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
