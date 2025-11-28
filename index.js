@@ -14,9 +14,9 @@ app.use(express.json());
 
 // Initialize Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Using gemini-pro which works with free tier API keys
+// Try gemini-1.5-flash - available on free tier
 const model = genAI.getGenerativeModel({
-  model: 'gemini-pro',
+  model: 'gemini-1.5-flash',
 });
 
 // Twilio client
@@ -82,9 +82,32 @@ For regular responses, just provide helpful text answers. Be concise and profess
     });
 
     // Get AI response from Gemini
-    const result = await model.generateContent(conversationContext);
-    const response = await result.response;
-    const aiResponse = response.text();
+    let aiResponse;
+    try {
+      const result = await model.generateContent(conversationContext);
+      const response = await result.response;
+      aiResponse = response.text();
+    } catch (geminiError) {
+      console.error('Gemini API Error:', {
+        message: geminiError.message,
+        status: geminiError.status,
+        statusText: geminiError.statusText,
+        details: geminiError
+      });
+
+      // Fallback response when Gemini fails
+      aiResponse = "I'm having trouble connecting to my AI service right now. Please try again in a moment.";
+
+      // Send error notification
+      await twilioClient.messages.create({
+        from: process.env.TWILIO_WHATSAPP_NUMBER,
+        to: from,
+        body: aiResponse
+      });
+
+      res.status(200).send('OK');
+      return;
+    }
 
     // Add AI response to history
     history.push({
