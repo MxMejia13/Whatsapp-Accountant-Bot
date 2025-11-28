@@ -1,0 +1,31 @@
+{
+  "name": "whatsapp-accountant-bot",
+  "version": "1.0.0",
+  "description": "AI-powered WhatsApp bot for accountant assistance with data visualization and intelligent responses",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:30039/git/MxMejia13/Whatsapp-Accountant-Bot"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.13.2",
+    "chartjs-node-canvas": "^5.0.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "sharp": "^0.34.5",
+    "twilio": "^5.10.6"
+  }
+}
