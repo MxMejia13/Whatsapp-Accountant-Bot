@@ -135,6 +135,8 @@ app.post('/webhook', async (req, res) => {
     // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.
 
+IMPORTANT: You have access to the full conversation history with this user. You CAN and SHOULD reference previous messages, images, data, and context from earlier in the conversation. When users ask about "earlier", "before", "the previous image", etc., use the conversation history to answer accurately.
+
 When users ask for TABLES (tabla, table, cuadro, relación, spreadsheet), respond with JSON:
 {
   "type": "table",
