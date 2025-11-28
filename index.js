@@ -243,7 +243,7 @@ For regular responses, be conversational, helpful, and concise.`;
     }
 
     // Send response
-    if (chartData && needsChart) {
+    if (chartData) {
       // Generate and send chart image
       const chartBuffer = await generateChart(chartData);
 
