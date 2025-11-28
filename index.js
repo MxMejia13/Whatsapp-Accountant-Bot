@@ -66,21 +66,9 @@ app.post('/webhook', async (req, res) => {
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
     // Build conversation context for OpenAI
-    const systemPrompt = `You are a helpful WhatsApp accountant bot. You assist with financial queries, calculations, expense tracking, and data analysis.
+    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.
 
-If the user asks for data in a table or chart format, structure your response as JSON with the following format:
-{
-  "type": "chart",
-  "chartType": "bar|line|pie",
-  "title": "Chart Title",
-  "data": {
-    "labels": ["Label1", "Label2"],
-    "values": [100, 200]
-  },
-  "message": "Brief explanation"
-}
-
-For regular responses, just provide helpful text answers. Be concise and professional.`;
+Be conversational, helpful, and concise. Keep responses brief and easy to read on mobile devices.`;
 
     // Format conversation history for OpenAI
     const messages = [
