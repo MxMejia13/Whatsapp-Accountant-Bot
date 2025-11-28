@@ -81,24 +81,52 @@ For regular responses, just provide helpful text answers. Be concise and profess
       conversationContext += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n\n`;
     });
 
-    // Get AI response from Gemini
+    // Get AI response from Gemini with retry logic
     let aiResponse;
-    try {
-      const result = await model.generateContent(conversationContext);
-      const response = await result.response;
-      aiResponse = response.text();
-    } catch (geminiError) {
-      console.error('Gemini API Error:', {
-        message: geminiError.message,
-        status: geminiError.status,
-        statusText: geminiError.statusText,
-        details: geminiError
-      });
+    const maxRetries = 3;
+    let retryCount = 0;
+    let lastError = null;
 
-      // Fallback response when Gemini fails
+    while (retryCount <= maxRetries) {
+      try {
+        const result = await model.generateContent(conversationContext);
+        const response = await result.response;
+        aiResponse = response.text();
+        break; // Success, exit retry loop
+      } catch (geminiError) {
+        lastError = geminiError;
+
+        console.error(`Gemini API Error (attempt ${retryCount + 1}/${maxRetries + 1}):`, {
+          message: geminiError.message,
+          status: geminiError.status,
+          statusText: geminiError.statusText
+        });
+
+        // Retry on 400 errors or network issues
+        const shouldRetry = geminiError.status === 400 ||
+                           geminiError.status === 429 ||
+                           geminiError.status === 503 ||
+                           geminiError.message?.includes('fetch');
+
+        if (shouldRetry && retryCount < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = 1000 * Math.pow(2, retryCount);
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          retryCount++;
+        } else {
+          // No more retries or non-retriable error
+          break;
+        }
+      }
+    }
+
+    // If all retries failed, send fallback response
+    if (!aiResponse) {
+      console.error('All Gemini API retries failed:', lastError);
+
       aiResponse = "I'm having trouble connecting to my AI service right now. Please try again in a moment.";
 
-      // Send error notification
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
