@@ -34,6 +34,9 @@ const twilioClient = twilio(
 // Store conversation context (in production, use a database)
 const conversationHistory = new Map();
 
+// Store forwarded messages waiting for analysis
+const forwardedMessages = new Map();
+
 // Store generated charts temporarily (chartId -> buffer)
 const chartStorage = new Map();
 
@@ -111,6 +114,22 @@ app.post('/webhook', async (req, res) => {
     // Ignore messages from the bot itself (sandbox number)
     if (from === process.env.TWILIO_WHATSAPP_NUMBER) {
       console.log('Ignoring message from bot itself');
+      res.status(200).send('OK');
+      return;
+    }
+
+    // Handle forwarded messages - store and wait for command
+    const isForwarded = req.body.Forwarded === 'true';
+    if (isForwarded) {
+      console.log(`Forwarded message detected from ${from}`);
+      forwardedMessages.set(from, {
+        content: incomingMsg,
+        receivedAt: new Date(),
+        numMedia: numMedia
+      });
+
+      // Acknowledge receipt without analyzing
+      await sendWhatsAppMessage(from, '📩 Mensaje reenviado recibido. Envíame tu pregunta o comando sobre este mensaje.');
       res.status(200).send('OK');
       return;
     }
@@ -209,8 +228,14 @@ app.post('/webhook', async (req, res) => {
     };
     const userTitle = userTitles[userPhone] || '';
 
+    // Check if user has a forwarded message waiting
+    const forwardedMsg = forwardedMessages.get(from);
+    const forwardedContext = forwardedMsg
+      ? `\n\nIMPORTANT - FORWARDED MESSAGE CONTEXT:\nThe user previously forwarded you this message:\n"${forwardedMsg.content}"\n\nTheir current message is asking about or commanding you regarding this forwarded message. Analyze the forwarded message and respond to their question/command about it.`
+      : '';
+
     // Build conversation context for OpenAI
-    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}
+    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}${forwardedContext}
 
 CRITICAL - CONVERSATION MEMORY:
 You have FULL ACCESS to this conversation history. ALL previous messages are visible to you in the conversation above.
@@ -426,6 +451,12 @@ For regular responses, be conversational, helpful, and concise.`;
     } else {
       // Send regular text response with automatic splitting
       await sendWhatsAppMessage(from, aiResponse);
+    }
+
+    // Clear forwarded message after responding
+    if (forwardedMsg) {
+      forwardedMessages.delete(from);
+      console.log(`Cleared forwarded message for ${from}`);
     }
 
     res.status(200).send('OK');
