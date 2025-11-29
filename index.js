@@ -306,20 +306,22 @@ Respond with ONLY a JSON object:
 
 **CRITICAL RULES FOR searchQuery:**
 1. Extract ONLY the document/file type - REMOVE action verbs (enviame, manda, dame, send, give, etc.)
-2. INCLUDE both Spanish AND English translations for better search
-3. Common translations:
-   - pasaporte → "pasaporte passport"
-   - cedula/cédula → "cedula ID identification"
-   - factura → "factura invoice"
-   - recibo → "recibo receipt"
-   - foto/imagen → "foto photo image"
-4. **IMPORTANT**: When user says "mi/my [document]", DO NOT add their name
+2. INCLUDE Spanish/English equivalents ONLY when they're specific document types
+3. **BE SPECIFIC** - avoid generic terms that match multiple document types:
+   - pasaporte → "pasaporte passport" (specific translation)
+   - cedula/cédula → "cedula" (already specific, no English equivalent needed)
+   - factura → "factura invoice" (specific translation)
+   - recibo → "recibo receipt" (specific translation)
+   - foto/imagen → "foto photo image picture" (all refer to images)
+   - ID/identification card → "ID identification card cedula" (searching for ID documents)
+4. **DO NOT use overly generic terms** like just "ID" or "identification" alone
+5. **IMPORTANT**: When user says "mi/my [document]", DO NOT add their name
    - Files are already filtered by phone number
    - Adding name makes search too strict (description may not contain it)
    - "mi pasaporte" → "pasaporte passport" (NO "Max")
-5. ONLY add person names if EXPLICITLY mentioned by user:
+6. ONLY add person names if EXPLICITLY mentioned by user:
    - "pasaporte de Max" → "pasaporte passport Max"
-   - "cedula Max Mejia" → "cedula ID identification Max Mejia"
+   - "cedula Max Mejia" → "cedula Max Mejia"
 
 **originalTerm:** The exact document type the user mentioned (for error messages)
 - "enviame mi pasaporte" → originalTerm: "pasaporte"
@@ -327,11 +329,11 @@ Respond with ONLY a JSON object:
 
 **Understanding Intent Examples:**
 
-"Mandame una foto de mi cedula" from Max → Extract "cedula" + add translations (NO name - it's "mi")
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification","originalTerm":"cedula","confidence":"high"}
+"Mandame una foto de mi cedula" from Max → Extract "cedula" (NO name - it's "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula","originalTerm":"cedula","confidence":"high"}
 
-"Enviame la imagen de la cedula" from Max → Extract "cedula" + add translations (NO name - implied "mi")
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification","originalTerm":"cedula","confidence":"high"}
+"Enviame la imagen de la cedula" from Max → Extract "cedula" (NO name - implied "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula","originalTerm":"cedula","confidence":"high"}
 
 "enviame mi pasaporte" from Max → Extract "pasaporte" + add translations (NO name - it's "mi")
 → {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport","originalTerm":"pasaporte","confidence":"high"}
@@ -339,11 +341,14 @@ Respond with ONLY a JSON object:
 "mandame mi pasaporte" from Max → Extract "pasaporte" + add translations (NO name - it's "mi")
 → {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport","originalTerm":"pasaporte","confidence":"high"}
 
-"enviame cedula de max mejia" → Extract "cedula" + add translations + EXPLICIT name
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification max mejia","originalTerm":"cedula","confidence":"high"}
+"enviame cedula de max mejia" → Extract "cedula" + EXPLICIT name
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula max mejia","originalTerm":"cedula","confidence":"high"}
 
 "pasaporte Max Mejia" → User explicitly mentioned name
 → {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport Max Mejia","originalTerm":"pasaporte","confidence":"high"}
+
+"Send me my ID" from Max → User wants ID/cedula (use specific terms)
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID identification card cedula","originalTerm":"ID","confidence":"high"}
 
 "enviame la imagen que te habia enviado" → User wants a previous image
 → {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null,"searchQuery":null,"originalTerm":"imagen","confidence":"medium"}
@@ -357,17 +362,18 @@ Respond with ONLY a JSON object:
 "Envíame la factura de marzo" → User wants invoice from March (keep "marzo" - it's specific context)
 → {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice marzo","originalTerm":"factura","confidence":"high"}
 
-"Send me my ID" from Max → Extract "ID" + add Spanish translation (NO name - it's "my")
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID cedula identification","originalTerm":"ID","confidence":"high"}
-
-"Enviaste el texto y no la imagen, enviame la imagen de la cedula de Max Mejia" → Ignore complaint, EXPLICIT name mentioned
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification Max Mejia","originalTerm":"cedula","confidence":"high"}
+"Enviaste el texto y no la imagen, enviame la imagen de la cedula de Max Mejia" → Ignore complaint, EXPLICIT name
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula Max Mejia","originalTerm":"cedula","confidence":"high"}
 
 **Rules Summary:**
-- searchQuery: Extract document type + ADD translations + person names (ONLY if explicitly mentioned)
-- Example: "pasaporte" → "pasaporte passport"
-- Example: "mi cedula" → "cedula ID identification" (NO name - files filtered by phone)
-- Example: "cedula Max Mejia" → "cedula ID identification Max Mejia" (name explicitly mentioned)
+- searchQuery: Extract specific document type + translations (only when specific)
+- **BE SPECIFIC** to avoid false matches:
+  - "pasaporte" → "pasaporte passport" (specific documents)
+  - "cedula" → "cedula" (already specific - no generic terms!)
+  - "factura" → "factura invoice" (specific documents)
+- **AVOID generic terms** that match multiple document types
+  - DON'T: "cedula ID identification" (too broad - "ID" matches passports)
+  - DO: "cedula" (specific enough)
 - **REMOVE action verbs:** "enviame", "manda", "dame", "send" are NOT part of search
 - **DO NOT add user's name for "mi/my":** Files are already filtered by their phone number
 - **ONLY add names when EXPLICITLY mentioned:** "pasaporte de Juan", "cedula Max"
