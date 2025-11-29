@@ -516,13 +516,25 @@ Respond with ONLY the JSON object, nothing else.`
                 model: 'gpt-4o',
                 messages: [{
                   role: 'user',
-                  content: `Summarize this audio transcription in 2-4 words for a filename (lowercase, use hyphens, no special characters): "${transcribedText}"`
+                  content: `Create a short filename (2-4 words max, lowercase, hyphens only, no quotes) that describes what this audio is about:
+
+"${transcribedText}"
+
+Examples:
+"I need to schedule a meeting for next week" -> "schedule-meeting"
+"Here's the invoice for March 2024" -> "march-invoice"
+"Reminder to buy groceries" -> "grocery-reminder"
+"Discussion about the project timeline" -> "project-timeline"
+
+Now create a filename for the audio above (2-4 words, lowercase, hyphens, no other text):`
                 }],
-                max_tokens: 20
+                max_tokens: 15,
+                temperature: 0.3
               });
               descriptiveName = summaryCompletion.choices[0].message.content.trim()
                 .toLowerCase()
                 .replace(/[^a-z0-9-]/g, '-')
+                .replace(/^-+|-+$/g, '') // Remove leading/trailing hyphens
                 .replace(/-+/g, '-')
                 .substring(0, 50);
               console.log(`✅ Generated audio filename: ${descriptiveName}`);
@@ -634,13 +646,24 @@ You: "✅ Image saved with an intelligent name based on what it shows! This imag
 User: [sends document]
 You: "✅ Document saved! You can retrieve it by asking 'send me the latest document' or 'what's the name of the last document?'"
 
-IMPORTANT: When users ask to retrieve files, they want the ACTUAL FILE sent back to them, not just the filename.
-- "Send me the audio" → Send the audio file via WhatsApp
-- "Dame la imagen" → Send the image file via WhatsApp
-- "What's the name?" → Just tell them the filename
+IMPORTANT: When users ask to retrieve files, the AUTOMATIC FILE QUERY SYSTEM handles it.
+If a user asks for files (e.g., "send me the audio", "dame la imagen"), the system will:
+1. Detect the query automatically
+2. Search for the files
+3. Send them back to the user
 
+You should ONLY respond to file-related queries if you're discussing files in general or explaining how the system works.
+
+NEVER respond with phrases like:
+- "Here's your audio" (without actually sending it)
+- "I'll send you the file" (the system sends it, not you)
+- "I cannot send files" (you CAN via the automatic system)
+
+If a user asks for a file and you see this message, it means the automatic system already handled it, so you don't need to respond about sending files.
+
+For file NAME queries (not retrieval):
 User: "What's the name of the last audio file I sent?"
-You: The file query system will provide the actual filename.
+You: The file query system provides the actual filename.
 
 NEVER say you cannot access filenames or that files don't have specific names - ALL files have intelligent AI-generated names that you can query.
 
