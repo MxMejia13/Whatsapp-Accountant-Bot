@@ -644,6 +644,93 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
       }
     }
 
+    // Intelligent Image Operation Intent Detection
+    // When user sends an image with text, determine if they want to:
+    // 1. SAVE the image (already done automatically above)
+    // 2. GENERATE/EDIT a new image using DALL-E
+    // 3. Just analyze the image (already done automatically)
+    if (hasMediaAttached && messageType === 'image' && incomingMsg && incomingMsg.trim()) {
+      try {
+        const intentAnalysis = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [{
+            role: 'user',
+            content: `Analyze the user's message accompanying an image they sent. Determine their intent.
+
+User message: "${incomingMsg}"
+
+Respond with ONLY a JSON object:
+
+{
+  "intent": "save|generate|edit|analyze|unclear",
+  "customName": "extracted name or null",
+  "confidence": "high|medium|low",
+  "action": "description of what to do"
+}
+
+**Intent Types:**
+
+1. **save** - User wants to SAVE/ADD the image
+   - Keywords: "add", "save", "agrega", "guarda", "añade", "store"
+   - Examples: "Agrega esta imagen", "Save this", "Add this image as cedula"
+
+2. **generate** - User wants to GENERATE a NEW image using DALL-E
+   - Keywords: "create", "generate", "make", "crea", "genera", "haz"
+   - Examples: "Create an image like this", "Generate a similar image"
+
+3. **edit** - User wants to EDIT/MODIFY the sent image
+   - Keywords: "edit", "modify", "change", "edita", "modifica", "cambia"
+   - Examples: "Edit this image", "Change the background"
+
+4. **analyze** - User just wants analysis/description (default for images)
+   - No specific action keywords
+   - Examples: "What is this?", "Describe this", "¿Qué es esto?"
+
+5. **unclear** - Can't determine intent with confidence
+
+**Custom Name Extraction:**
+- If user says "como [name]" or "as [name]", extract the name
+- Examples: "Agrega esta imagen como cedula Max" → customName: "cedula Max"
+
+**Examples:**
+
+"Agrega esta imagen como cedula Max Mejia"
+→ {"intent":"save","customName":"cedula Max Mejia","confidence":"high","action":"save with custom name"}
+
+"Add this image"
+→ {"intent":"save","customName":null,"confidence":"high","action":"save image"}
+
+"Create an image based on this"
+→ {"intent":"generate","customName":null,"confidence":"high","action":"use DALL-E to generate similar image"}
+
+"Edit this image to remove the background"
+→ {"intent":"edit","customName":null,"confidence":"high","action":"use DALL-E to edit image"}
+
+"What does this show?"
+→ {"intent":"analyze","customName":null,"confidence":"high","action":"analyze and describe image"}
+
+Respond with ONLY the JSON:`
+          }],
+          max_tokens: 150
+        });
+
+        const intentText = intentAnalysis.choices[0].message.content.trim();
+        imageOperationIntent = JSON.parse(intentText.match(/\{[\s\S]*\}/)[0]);
+        console.log('🖼️ Image operation intent:', JSON.stringify(imageOperationIntent));
+
+        // If confidence is low, ask for clarification
+        if (imageOperationIntent.confidence === 'low' || imageOperationIntent.intent === 'unclear') {
+          console.log('⚠️ Unclear image intent - asking for clarification');
+          await sendWhatsAppMessage(from, `No estoy seguro de qué quieres que haga con esta imagen. ¿Quieres que:\n- La guarde?\n- Genere una imagen similar?\n- La edite?\n- Solo la analice?`);
+          res.status(200).send('OK');
+          return;
+        }
+      } catch (intentError) {
+        console.error('Error analyzing image intent:', intentError);
+        // Continue with normal processing if intent detection fails
+      }
+    }
+
     // Get or initialize conversation history
     if (!conversationHistory.has(from)) {
       conversationHistory.set(from, []);
@@ -666,9 +753,11 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
     }
 
     // Determine if request needs visual output
-    // Only for text-only messages requesting GENERATION (not retrieval or when sending files)
-    const needsChart = !hasMediaAttached && /\b(chart|graph|visualize|plot)\b/i.test(incomingMsg);
-    const needsImage = !hasMediaAttached && /\b(generate|create|draw|make).*\b(image|picture|diagram)\b/i.test(incomingMsg);
+    const needsChart = !hasMediaAttached && /\b(chart|graph|visualize|plot|tabla|gráfico)\b/i.test(incomingMsg);
+
+    // For image operations, we'll use intelligent AI-based intent detection
+    // This will be handled after file processing, using context-aware analysis
+    let imageOperationIntent = null;
 
     // Detect user identity for custom greetings
     const userTitles = {
@@ -699,25 +788,36 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
 
 **Your behavior when receiving media (images, audio, documents, videos):**
 
-1. **ANALYZE** what the file shows/contains
-2. **CONFIRM** receipt and what you understood from it
-3. **DON'T ASK** what to do - the file is AUTOMATICALLY saved with an intelligent name
+ALL files are AUTOMATICALLY SAVED with intelligent AI-generated names. The system detects user intent:
+
+**1. SAVE Intent** (default for most files):
+- File is automatically saved
+- You analyze and confirm what was saved
+- If user provides custom name ("como [name]"), acknowledge it
+
+**2. GENERATE/EDIT Intent** (for images only, when DALL-E keywords detected):
+- "Create/Generate an image like this" → DALL-E generation
+- "Edit this image" → DALL-E editing
+- System will inform you if DALL-E operation is requested
 
 **Examples of CORRECT responses:**
 
-User: [sends image of cedula/ID card with caption "Agrega esta imagen como cedula Max Mejia"]
-You: "✅ Cédula guardada, Sr. Max! Esta es su cédula de identidad - número 402-2873981-5. La imagen se guardó automáticamente con un nombre inteligente y la puedo recuperar cuando la necesite."
+User: [sends cedula image] "Agrega esta imagen como cedula Max Mejia"
+Intent: SAVE with custom name
+You: "✅ Cédula guardada, Sr. Max! Esta es su cédula de identidad - número 402-2873981-5. La guardé como 'cedula Max Mejia' y la puedo recuperar cuando la necesite."
 
-User: [sends audio about meeting]
-You: "✅ Audio guardado! Transcribí: '[transcription]'. Se guardó con un nombre basado en el contenido."
+User: [sends image] "Create an image similar to this"
+Intent: GENERATE (DALL-E operation)
+You: [System handles DALL-E if configured] OR "Necesito DALL-E configurado para generar imágenes. Por ahora, analicé la imagen que enviaste: [description]"
 
-User: [sends invoice photo]
-You: "✅ Factura guardada! Veo que es de [details from image]. Guardada automáticamente para cuando la necesite."
+User: [sends audio]
+Intent: SAVE (automatic)
+You: "✅ Audio guardado! Transcribí: '[transcription]'. Se guardó automáticamente con un nombre inteligente."
 
 **WRONG responses (NEVER do this):**
-- "¿Quieres que guarde esta imagen?" (Don't ask - just save)
-- "¿Cómo debo nombrar este archivo?" (It's automatically named intelligently)
-- "Agrega esta imagen como..." (Don't repeat their caption as a command)
+- "¿Quieres que guarde esta imagen?" (Don't ask - it's already saved)
+- "¿Cómo debo nombrar este archivo?" (Already named intelligently)
+- Repeating their caption as a question
 
 ## WHEN USER REQUESTS FILES:
 
