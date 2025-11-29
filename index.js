@@ -174,8 +174,12 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Handle file retrieval commands
-    if (process.env.DATABASE_URL && user && incomingMsg) {
+    // IMPORTANT: Only handle file retrieval queries if NO media is attached
+    // If media is attached, we'll save it first and confirm - NOT search for files
+    const hasMediaAttached = numMedia > 0;
+
+    // Handle file retrieval commands (ONLY for text-only messages)
+    if (!hasMediaAttached && process.env.DATABASE_URL && user && incomingMsg) {
       const msg = incomingMsg.toLowerCase();
 
       try {
@@ -185,34 +189,54 @@ app.post('/webhook', async (req, res) => {
         if (isFileQuery) {
           console.log('🔍 Potential file query detected:', incomingMsg);
 
-          // Use GPT-4o to interpret the user's intent
+          // Use GPT-4o to interpret the user's intent with context awareness
           const intentCompletion = await openai.chat.completions.create({
             model: 'gpt-4o',
             messages: [{
               role: 'user',
-              content: `Analyze this user query about files and respond with ONLY a JSON object (no other text):
+              content: `You are analyzing a user's request for files. Understand their INTENT regardless of exact wording.
 
 User query: "${incomingMsg}"
 
-Determine:
-1. action: "retrieve" (send file back), "info" (tell me about file), "list" (show what files I have), or "none" (not a file query)
-2. fileType: "image", "audio", "video", "document", or null (any type)
-3. timeframe: "latest" (most recent), "today", "yesterday", "all", or null
-4. infoType: if action is "info", what info do they want? "filename", "count", "date", "all"
-5. searchQuery: extract the key search terms if user is searching for specific content (e.g., "cedula", "invoice", "receipt"), or null if just asking for latest/all files
+Respond with ONLY a JSON object:
 
-Examples:
-"Send me the latest audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null}
-"Dame el audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null}
-"Send me a cedula" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula"}
-"Envíame la factura" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice"}
-"Send me the receipt photo" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"receipt"}
-"What's the name of the last audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null}
-"I want the audio about the meeting" -> {"action":"retrieve","fileType":"audio","timeframe":"all","infoType":null,"searchQuery":"meeting"}
+{
+  "action": "retrieve|info|list|none",
+  "fileType": "image|audio|video|document|null",
+  "timeframe": "latest|today|yesterday|all|null",
+  "infoType": "filename|count|date|all|null",
+  "searchQuery": "key terms or null",
+  "confidence": "high|medium|low"
+}
 
-Respond with ONLY the JSON object, nothing else.`
+**Understanding Intent Examples:**
+
+"Mandame una foto de mi cedula" → User wants their cedula PHOTO sent back
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula identificacion ID card","confidence":"high"}
+
+"enviame la imagen que te habia enviado" → User wants a previous image
+→ {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null,"searchQuery":null,"confidence":"medium"}
+
+"Dame el audio" → User wants latest audio file
+→ {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null,"confidence":"high"}
+
+"Como se llama el ultimo audio?" → User wants filename info
+→ {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null,"confidence":"high"}
+
+"Envíame la factura de marzo" → User wants invoice from March
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice marzo march","confidence":"high"}
+
+"Send me my ID" → User wants ID/cedula
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification card","confidence":"high"}
+
+**Rules:**
+- searchQuery should include SYNONYMS in both English & Spanish (cedula = ID = identification = cédula)
+- Set confidence based on clarity of request
+- If unsure, set confidence "low"
+
+Respond with ONLY the JSON object:`
             }],
-            max_tokens: 120
+            max_tokens: 150
           });
 
           let intent;
@@ -232,6 +256,14 @@ Respond with ONLY the JSON object, nothing else.`
           if (intent.action === 'none') {
             console.log('ℹ️  Not a file query, continuing to normal chat');
             throw new Error('Not a file query');
+          }
+
+          // If confidence is low, ask for clarification before searching
+          if (intent.confidence === 'low') {
+            console.log('⚠️  Low confidence - asking for clarification');
+            await sendWhatsAppMessage(from, `No estoy seguro de qué archivo buscas. ¿Podrías ser más específico? Por ejemplo:\n- "Mándame mi cédula"\n- "Envíame el audio de hoy"\n- "Dame la factura de marzo"`);
+            res.status(200).send('OK');
+            return;
           }
 
           let searchResults = [];
@@ -653,64 +685,78 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
       : '';
 
     // Build conversation context for OpenAI
-    const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}${forwardedContext}
+    const systemPrompt = `You are an intelligent WhatsApp assistant with deep contextual understanding. You analyze what users say, understand their intent regardless of wording, and provide helpful responses.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}${forwardedContext}
 
-AUTOMATIC FILE STORAGE:
-You have an AUTOMATIC FILE STORAGE SYSTEM that saves all media files with INTELLIGENT AI-GENERATED NAMES:
-- ✅ Images are AUTOMATICALLY saved with descriptive names based on what they show (e.g., "invoice-march-2024_2024-11-29_14-30-25.jpg")
-- ✅ Audio files are AUTOMATICALLY saved with names based on their transcription (e.g., "meeting-notes_2024-11-29_09-15-42.ogg")
-- ✅ Documents/PDFs are saved as "document_[date]_[time].pdf"
-- ✅ Videos are AUTOMATICALLY saved
+## CORE PRINCIPLES:
+1. **Understand Intent**: Interpret what the user MEANS, not just what they literally say
+2. **Be Proactive**: When you receive files, automatically save them - don't ask what to do
+3. **Use Context**: Remember conversation history and user patterns
+4. **Confirm When Unsure**: If genuinely uncertain about user's intent, ask for clarification
+5. **Learn**: Each interaction helps you understand the user better
 
-IMPORTANT - FILE NAMING SYSTEM:
-When users ask about filenames, you CAN access this information through the file query system:
-- Audio files: Named based on a 2-4 word summary of the transcription
-- Image files: Named based on a 2-4 word description of the content
-- Format: {descriptive-name}_{YYYY-MM-DD}_{HH-MM-SS}.{extension}
+## WHEN USER SENDS FILES:
 
-Example:
-User: [sends audio about a meeting]
-System saves as: "meeting-discussion_2024-11-29_10-30-15.ogg"
-User: "What's the name of the last audio?"
-You: "The audio file is named 'meeting-discussion_2024-11-29_10-30-15.ogg' - it was saved on 11/29/2024 at 10:30."
+**Your behavior when receiving media (images, audio, documents, videos):**
 
-When users send you media (image, audio, document), you should:
-1. Acknowledge receipt and confirm it's been saved with an intelligent AI-generated name
-2. Tell them they can retrieve it or ask for its name later
+1. **ANALYZE** what the file shows/contains
+2. **CONFIRM** receipt and what you understood from it
+3. **DON'T ASK** what to do - the file is AUTOMATICALLY saved with an intelligent name
 
-Example responses:
-User: [sends audio]
-You: "✅ Audio received and saved with an intelligent name based on the content! I've transcribed it: [transcription]. You can retrieve this audio by asking 'send me the latest audio' or ask 'what's the name of my last audio?'"
+**Examples of CORRECT responses:**
 
-User: [sends image]
-You: "✅ Image saved with an intelligent name based on what it shows! This image shows [description]. You can retrieve it by asking 'send me the latest image' or ask 'what's the name of the last image?'"
+User: [sends image of cedula/ID card with caption "Agrega esta imagen como cedula Max Mejia"]
+You: "✅ Cédula guardada, Sr. Max! Esta es su cédula de identidad - número 402-2873981-5. La imagen se guardó automáticamente con un nombre inteligente y la puedo recuperar cuando la necesite."
 
-User: [sends document]
-You: "✅ Document saved! You can retrieve it by asking 'send me the latest document' or 'what's the name of the last document?'"
+User: [sends audio about meeting]
+You: "✅ Audio guardado! Transcribí: '[transcription]'. Se guardó con un nombre basado en el contenido."
 
-IMPORTANT: When users ask to retrieve files, the AUTOMATIC FILE QUERY SYSTEM handles it.
-If a user asks for files (e.g., "send me the audio", "dame la imagen"), the system will:
-1. Detect the query automatically
-2. Search for the files
-3. Send them back to the user
+User: [sends invoice photo]
+You: "✅ Factura guardada! Veo que es de [details from image]. Guardada automáticamente para cuando la necesite."
 
-You should ONLY respond to file-related queries if you're discussing files in general or explaining how the system works.
+**WRONG responses (NEVER do this):**
+- "¿Quieres que guarde esta imagen?" (Don't ask - just save)
+- "¿Cómo debo nombrar este archivo?" (It's automatically named intelligently)
+- "Agrega esta imagen como..." (Don't repeat their caption as a command)
 
-NEVER respond with phrases like:
-- "Here's your audio" (without actually sending it)
-- "I'll send you the file" (the system sends it, not you)
-- "I cannot send files" (you CAN via the automatic system)
+## WHEN USER REQUESTS FILES:
 
-If a user asks for a file and you see this message, it means the automatic system already handled it, so you don't need to respond about sending files.
+When users ask for files back, the **AUTOMATIC FILE RETRIEVAL SYSTEM** handles it.
 
-For file NAME queries (not retrieval):
-User: "What's the name of the last audio file I sent?"
-You: The file query system provides the actual filename.
+**How it works:**
+- User says: "Send me my cedula" or "Mandame la foto de mi cedula"
+- System AUTOMATICALLY searches by description/content (semantic search)
+- System sends the file back
+- You should ONLY acknowledge if needed, NOT say "here's your file" when you didn't send it
 
-NEVER say you cannot access filenames or that files don't have specific names - ALL files have intelligent AI-generated names that you can query.
+**Examples:**
 
-CRITICAL - CONVERSATION MEMORY:
-You have FULL ACCESS to this conversation history. ALL previous messages are visible to you in the conversation above.
+User: "Mandame una foto de mi cedula"
+System: [Automatically searches for cedula images and sends them]
+You: [The system already sent it, so you can be brief] "Enviada! ✅"
+
+OR if you're unsure what they mean:
+You: "Busco tu cédula..." [then system sends it]
+
+**NEVER say:**
+- "No puedo enviar archivos" (YES YOU CAN via the automatic system)
+- "Aquí está tu archivo" [without the system actually sending it]
+- "No image files found" [when you haven't even searched yet]
+
+## UNDERSTANDING INTENT:
+
+**Be smart about what users mean:**
+
+"Mandame una foto de mi cedula" = They want you to SEND their previously saved cedula image
+"Agrega esta [image]" = They're sending you an image to SAVE (it saves automatically)
+"Como se llama el audio?" = They want the FILENAME of the audio
+"Enviame la imagen que te habia enviado" = They want a PREVIOUSLY SENT image back
+
+**If unsure:**
+- Ask ONE clarifying question
+- Examples: "¿Te refieres a la imagen que enviaste hoy o alguna anterior?" or "¿Buscas tu cédula o algún otro documento?"
+
+## CONVERSATION MEMORY:
+You have FULL ACCESS to this conversation history. Use it to understand context.
 
 Example workflow:
 User: [sends image] "What's in this image?"
