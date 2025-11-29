@@ -381,10 +381,54 @@ app.post('/webhook', async (req, res) => {
             fs.mkdirSync(mediaDir, { recursive: true });
           }
 
-          // Generate filename
+          // Generate intelligent filename based on content
           const timestamp = Date.now();
           const extension = mediaType.split('/')[1]?.split(';')[0] || 'bin';
-          const fileName = `${savedMessage.id}_${timestamp}.${extension}`;
+          let descriptiveName = 'file';
+
+          try {
+            if (messageType === 'image' && imageData) {
+              // Use GPT-4o vision to generate descriptive name
+              const nameCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [{
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: 'Describe this image in 2-4 words for a filename (lowercase, use hyphens instead of spaces, no special characters). Examples: "invoice-march-2024", "family-photo", "product-receipt"' },
+                    { type: 'image_url', image_url: { url: imageData } }
+                  ]
+                }],
+                max_tokens: 20
+              });
+              descriptiveName = nameCompletion.choices[0].message.content.trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9-]/g, '-')
+                .replace(/-+/g, '-')
+                .substring(0, 50);
+            } else if (messageType === 'audio' && transcribedText) {
+              // Use transcription to generate descriptive name
+              const summaryCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [{
+                  role: 'user',
+                  content: `Summarize this audio transcription in 2-4 words for a filename (lowercase, use hyphens, no special characters): "${transcribedText}"`
+                }],
+                max_tokens: 20
+              });
+              descriptiveName = summaryCompletion.choices[0].message.content.trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9-]/g, '-')
+                .replace(/-+/g, '-')
+                .substring(0, 50);
+            } else if (messageType === 'document') {
+              descriptiveName = 'document';
+            }
+          } catch (namingError) {
+            console.error('Error generating descriptive filename:', namingError);
+            descriptiveName = messageType || 'file';
+          }
+
+          const fileName = `${savedMessage.id}_${descriptiveName}_${timestamp}.${extension}`;
           const filePath = path.join(mediaDir, fileName);
 
           // Save file to disk
@@ -434,7 +478,6 @@ app.post('/webhook', async (req, res) => {
     const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
 
     // Detect user identity for custom greetings
-    const userPhone = from.replace('whatsapp:', '');
     const userTitles = {
       '+18093833443': 'Sr. Mejia',
       '+18096510177': 'Sr. Max',
