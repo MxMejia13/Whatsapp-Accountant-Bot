@@ -21,10 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
     direction VARCHAR(10) CHECK (direction IN ('incoming', 'outgoing')),
     message_type VARCHAR(20) DEFAULT 'text', -- text, image, audio, document
     is_forwarded BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_phone (phone_number),
-    INDEX idx_created (created_at),
-    INDEX idx_user (user_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Media files table (for images, audio, documents)
@@ -37,9 +34,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     file_description TEXT, -- AI-generated description of file content for semantic search
     storage_url TEXT, -- URL where file is stored (S3, R2, etc.)
     twilio_media_url TEXT, -- Original Twilio URL
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_message (message_id),
-    INDEX idx_type (file_type)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Conversation threads (optional, for grouping related messages)
@@ -49,8 +44,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     title VARCHAR(200),
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    message_count INTEGER DEFAULT 0,
-    INDEX idx_user (user_id)
+    message_count INTEGER DEFAULT 0
 );
 
 -- Analytics/Logs (optional)
@@ -59,15 +53,20 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     user_id INTEGER REFERENCES users(id),
     action VARCHAR(50), -- message_sent, image_analyzed, table_generated, etc.
     details JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_user (user_id),
-    INDEX idx_action (action),
-    INDEX idx_created (created_at)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_messages_phone ON messages(phone_number);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_user_date ON messages(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_message ON media_files(message_id);
+CREATE INDEX IF NOT EXISTS idx_media_type ON media_files(file_type);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_action ON usage_logs(action);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_logs(created_at);
 
 -- Function to update last_active timestamp
 CREATE OR REPLACE FUNCTION update_user_last_active()
