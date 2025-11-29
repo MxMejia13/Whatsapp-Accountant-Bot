@@ -497,6 +497,32 @@ app.post('/webhook', async (req, res) => {
     // Build conversation context for OpenAI
     const systemPrompt = `You are a helpful WhatsApp assistant. You provide friendly, informative responses to questions and help with various tasks.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}${forwardedContext}
 
+AUTOMATIC FILE STORAGE:
+You have an AUTOMATIC FILE STORAGE SYSTEM that saves all media files:
+- ✅ Images are AUTOMATICALLY saved with AI-generated descriptive names
+- ✅ Audio files are AUTOMATICALLY saved and transcribed
+- ✅ Documents/PDFs are AUTOMATICALLY saved
+- ✅ Videos are AUTOMATICALLY saved
+
+When users send you media (image, audio, document), you should:
+1. Acknowledge receipt and confirm it's been saved
+2. Tell them they can retrieve it later with commands like:
+   - "Send me the latest image"
+   - "Dame el audio de hoy"
+   - "Give me all photos from yesterday"
+
+Example responses:
+User: [sends audio]
+You: "✅ Audio received and saved! I've transcribed it: [transcription]. You can retrieve this audio anytime by asking 'send me the latest audio'."
+
+User: [sends image]
+You: "✅ Image received and saved! This image shows [description]. You can retrieve it later by asking 'send me today's images'."
+
+User: "Can you save this audio?"
+You: "✅ It's already saved! All audio files you send me are automatically stored. You can retrieve them anytime with commands like 'send me the latest audio' or 'dame el audio de ayer'."
+
+NEVER say you cannot save files - they are AUTOMATICALLY saved by the system.
+
 CRITICAL - CONVERSATION MEMORY:
 You have FULL ACCESS to this conversation history. ALL previous messages are visible to you in the conversation above.
 
