@@ -435,6 +435,7 @@ Respond with ONLY the JSON object:`
     let messageType = 'text'; // Default to text, will be updated if media is present
     let transcribedText = null;
     let imageData = null;
+    let imageOperationIntent = null; // Will be set if image intent detection runs
 
     let mediaBuffer = null;
 
@@ -757,7 +758,7 @@ Respond with ONLY the JSON:`
 
     // For image operations, we'll use intelligent AI-based intent detection
     // This will be handled after file processing, using context-aware analysis
-    let imageOperationIntent = null;
+    // (imageOperationIntent already declared at top with other media variables)
 
     // Detect user identity for custom greetings
     const userTitles = {
@@ -1069,10 +1070,6 @@ For regular responses, be conversational, helpful, and concise.`;
         body: sentMessageContent,
         mediaUrl: [visualUrl]
       });
-    } else if (needsImage && !visualData) {
-      // For image generation requests without DALL-E setup
-      sentMessageContent = aiResponse;
-      await sendWhatsAppMessage(from, aiResponse);
     } else {
       // Send regular text response with automatic splitting
       sentMessageContent = aiResponse;
