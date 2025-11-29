@@ -13,6 +13,14 @@ const {
   listScheduledMessages
 } = require('./utils/scheduler');
 
+// Initialize database if DATABASE_URL is configured
+if (process.env.DATABASE_URL) {
+  const { initializeDatabase } = require('./database/db');
+  initializeDatabase().catch(err => {
+    console.log('⚠️  Database initialization skipped (tables may already exist)');
+  });
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
