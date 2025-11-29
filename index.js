@@ -244,7 +244,8 @@ app.post('/webhook', async (req, res) => {
 
       try {
         // Use AI to detect if this is a file-related query
-        const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy|how many|cuánto|list|lista/i);
+        // Includes: file types, Spanish verbs (send/give/want), document types, time references
+        const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|enviame|envia|manda|mandame|dame|quiero|necesito|busca|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy|how many|cuánto|list|lista|cedula|cédula|pasaport|id|identificacion|factura|invoice|recibo|receipt/i);
 
         if (isFileQuery) {
           console.log('🔍 Potential file query detected:', incomingMsg);
@@ -957,27 +958,29 @@ You: "✅ Audio guardado! Transcribí: '[transcription]'. Se guardó automática
 
 ## WHEN USER REQUESTS FILES:
 
-When users ask for files back, the **AUTOMATIC FILE RETRIEVAL SYSTEM** handles it.
+When users ask for files back, the **AUTOMATIC FILE RETRIEVAL SYSTEM** handles it COMPLETELY.
+
+**CRITICAL: DO NOT confirm file sends!** The automatic system handles EVERYTHING.
 
 **How it works:**
-- User says: "Send me my cedula" or "Mandame la foto de mi cedula"
+- User says: "Send me my cedula" or "Mandame la foto de mi cedula" or "enviame cedula"
 - System AUTOMATICALLY searches by description/content (semantic search)
-- System sends the file back
-- You should ONLY acknowledge if needed, NOT say "here's your file" when you didn't send it
+- System AUTOMATICALLY sends the file(s) with message like "📎 filename (date)"
+- System AUTOMATICALLY asks for confirmation if multiple files found
+- **YOU DO NOTHING** - the system handles it all
 
-**Examples:**
-
-User: "Mandame una foto de mi cedula"
-System: [Automatically searches for cedula images and sends them]
-You: [The system already sent it, so you can be brief] "Enviada! ✅"
-
-OR if you're unsure what they mean:
-You: "Busco tu cédula..." [then system sends it]
+**What you should do:**
+- If user asks for files: **STAY SILENT** - let the automatic system handle it
+- The automatic system will respond before you, so you won't even see these messages
+- Only respond if they ask you something ELSE after receiving the file
 
 **NEVER say:**
+- "Enviada! ✅" (the automatic system already handled it)
+- "Aquí está tu archivo" (you didn't send it, the system did)
 - "No puedo enviar archivos" (YES YOU CAN via the automatic system)
-- "Aquí está tu archivo" [without the system actually sending it]
-- "No image files found" [when you haven't even searched yet]
+- "No image files found" (you don't search - the automatic system does)
+
+**Remember:** File retrieval requests are intercepted BEFORE they reach you. If you're seeing a file request, the automatic system already tried and failed, so ask for clarification.
 
 ## UNDERSTANDING INTENT:
 
