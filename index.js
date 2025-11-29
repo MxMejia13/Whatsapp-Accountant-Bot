@@ -550,7 +550,34 @@ Respond with ONLY the JSON object:`
           let fileDescription = null;
 
           try {
-            if (messageType === 'image' && imageData) {
+            // Check if user provided a custom name via "como [name]" or "as [name]"
+            if (imageOperationIntent && imageOperationIntent.customName) {
+              // Use the custom name provided by the user
+              descriptiveName = imageOperationIntent.customName
+                .toLowerCase()
+                .replace(/[^a-z0-9-\s]/g, '') // Remove special chars but keep spaces
+                .replace(/\s+/g, '-') // Replace spaces with hyphens
+                .replace(/-+/g, '-') // Remove duplicate hyphens
+                .substring(0, 50);
+              console.log(`✅ Using custom filename: ${descriptiveName}`);
+
+              // Still generate description for semantic search
+              if (messageType === 'image' && imageData) {
+                const descCompletion = await openai.chat.completions.create({
+                  model: 'gpt-4o',
+                  messages: [{
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: 'Describe what you see in this image in 1-2 sentences. Include any visible text, objects, people, or important details.' },
+                      { type: 'image_url', image_url: { url: imageData } }
+                    ]
+                  }],
+                  max_tokens: 100
+                });
+                fileDescription = descCompletion.choices[0].message.content.trim();
+                console.log(`✅ Generated image description: ${fileDescription}`);
+              }
+            } else if (messageType === 'image' && imageData) {
               // Use GPT-4o vision to generate both filename and description
               const nameCompletion = await openai.chat.completions.create({
                 model: 'gpt-4o',
