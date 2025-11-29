@@ -373,12 +373,12 @@ app.post('/webhook', async (req, res) => {
 
         // Save media file if present
         if (mediaBuffer && mediaUrl && savedMessage) {
-          // Create media directory if it doesn't exist
+          // Create user-specific media directory if it doesn't exist
           const fs = require('fs');
           const path = require('path');
-          const mediaDir = path.join(__dirname, 'media');
-          if (!fs.existsSync(mediaDir)) {
-            fs.mkdirSync(mediaDir, { recursive: true });
+          const userMediaDir = path.join(__dirname, 'media', userPhone);
+          if (!fs.existsSync(userMediaDir)) {
+            fs.mkdirSync(userMediaDir, { recursive: true });
           }
 
           // Generate intelligent filename based on content
@@ -431,7 +431,7 @@ app.post('/webhook', async (req, res) => {
           }
 
           const fileName = `${descriptiveName}_${dateStr}_${timeStr}.${extension}`;
-          const filePath = path.join(mediaDir, fileName);
+          const filePath = path.join(userMediaDir, fileName);
 
           // Save file to disk
           fs.writeFileSync(filePath, mediaBuffer);
