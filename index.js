@@ -666,8 +666,9 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
     }
 
     // Determine if request needs visual output
-    const needsChart = /\b(chart|graph|visualize|plot)\b/i.test(incomingMsg);
-    const needsImage = /image|picture|draw|show.*visual|diagram/i.test(incomingMsg);
+    // Only for text-only messages requesting GENERATION (not retrieval or when sending files)
+    const needsChart = !hasMediaAttached && /\b(chart|graph|visualize|plot)\b/i.test(incomingMsg);
+    const needsImage = !hasMediaAttached && /\b(generate|create|draw|make).*\b(image|picture|diagram)\b/i.test(incomingMsg);
 
     // Detect user identity for custom greetings
     const userTitles = {
@@ -969,10 +970,9 @@ For regular responses, be conversational, helpful, and concise.`;
         mediaUrl: [visualUrl]
       });
     } else if (needsImage && !visualData) {
-      // For image requests, inform about limitation
-      const message = aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)';
-      sentMessageContent = message;
-      await sendWhatsAppMessage(from, message);
+      // For image generation requests without DALL-E setup
+      sentMessageContent = aiResponse;
+      await sendWhatsAppMessage(from, aiResponse);
     } else {
       // Send regular text response with automatic splitting
       sentMessageContent = aiResponse;
