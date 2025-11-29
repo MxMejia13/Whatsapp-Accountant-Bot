@@ -35,3 +35,6 @@ Thumbs.db
 # Build files
 dist/
 build/
+
+# Media files (stored locally)
+media/

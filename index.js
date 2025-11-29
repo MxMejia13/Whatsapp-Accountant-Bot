@@ -13,9 +13,22 @@ const {
   listScheduledMessages
 } = require('./utils/scheduler');
 
+// Database functions
+const {
+  initializeDatabase,
+  getOrCreateUser,
+  saveMessage,
+  saveMediaFile,
+  getConversationHistory,
+  searchMediaFiles,
+  getMediaByDateRange,
+  getLatestMediaFile,
+  searchMessages,
+  getAllMediaFiles
+} = require('./database/db');
+
 // Initialize database if DATABASE_URL is configured
 if (process.env.DATABASE_URL) {
-  const { initializeDatabase } = require('./database/db');
   initializeDatabase().catch(err => {
     console.log('⚠️  Database initialization skipped (tables may already exist)');
   });
@@ -126,6 +139,19 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Get or create user in database
+    const userPhone = from.replace('whatsapp:', '');
+    let user = null;
+    if (process.env.DATABASE_URL) {
+      try {
+        user = await getOrCreateUser(userPhone);
+        console.log(`User identified: ${user.id} - ${user.phone_number}`);
+      } catch (dbError) {
+        console.error('Database error getting user:', dbError);
+        // Continue without database if it fails
+      }
+    }
+
     // Handle forwarded messages - store and wait for command
     const isForwarded = req.body.Forwarded === 'true';
     if (isForwarded) {
@@ -140,6 +166,125 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsAppMessage(from, '📩 Mensaje reenviado recibido. Envíame tu pregunta o comando sobre este mensaje.');
       res.status(200).send('OK');
       return;
+    }
+
+    // Handle file retrieval commands
+    if (process.env.DATABASE_URL && user && incomingMsg) {
+      const msg = incomingMsg.toLowerCase();
+      let fileRetrieved = false;
+
+      try {
+        // Check for file retrieval commands
+        if (msg.match(/send|enviar|dame|give me|get|buscar|find/i) &&
+            msg.match(/image|imagen|photo|foto|picture|audio|video|document|documento|file|archivo/i)) {
+
+          let fileType = null;
+          let searchResults = [];
+
+          // Determine file type
+          if (msg.match(/image|imagen|photo|foto|picture/i)) {
+            fileType = 'image';
+          } else if (msg.match(/audio/i)) {
+            fileType = 'audio';
+          } else if (msg.match(/video/i)) {
+            fileType = 'video';
+          } else if (msg.match(/document|documento|pdf/i)) {
+            fileType = 'document';
+          }
+
+          // Check for time-based queries
+          if (msg.match(/latest|last|recent|más reciente|último|última/i)) {
+            // Get the most recent file of that type
+            if (fileType) {
+              const latestFile = await getLatestMediaFile(userPhone, fileType);
+              if (latestFile) {
+                searchResults = [latestFile];
+              }
+            }
+          } else if (msg.match(/yesterday|ayer/i)) {
+            // Get files from yesterday
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            yesterday.setHours(0, 0, 0, 0);
+            const endOfYesterday = new Date(yesterday);
+            endOfYesterday.setHours(23, 59, 59, 999);
+            searchResults = await getMediaByDateRange(userPhone, yesterday, endOfYesterday);
+          } else if (msg.match(/today|hoy/i)) {
+            // Get files from today
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            searchResults = await getMediaByDateRange(userPhone, today, new Date());
+          } else if (msg.match(/all|todos|todas/i)) {
+            // Get all files of that type
+            searchResults = fileType
+              ? await searchMediaFiles(userPhone, fileType, 20)
+              : await getAllMediaFiles(userPhone, 20);
+          } else {
+            // Default: get recent files
+            searchResults = fileType
+              ? await searchMediaFiles(userPhone, fileType, 5)
+              : await getAllMediaFiles(userPhone, 5);
+          }
+
+          // Send the files
+          if (searchResults.length > 0) {
+            const fs = require('fs');
+            const path = require('path');
+
+            await sendWhatsAppMessage(from, `📁 Found ${searchResults.length} file(s):`);
+
+            for (const file of searchResults.slice(0, 5)) { // Limit to 5 files
+              try {
+                // Read file from storage
+                const filePath = file.storage_url;
+                if (fs.existsSync(filePath)) {
+                  const fileBuffer = fs.readFileSync(filePath);
+
+                  // Generate unique ID and store in chartStorage for serving
+                  const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                  chartStorage.set(fileId, fileBuffer);
+
+                  // Clean up after 10 minutes
+                  setTimeout(() => chartStorage.delete(fileId), 10 * 60 * 1000);
+
+                  // Get public URL
+                  const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || `${req.hostname}`;
+                  const protocol = req.protocol || 'https';
+                  const fileUrl = `${protocol}://${publicDomain}/media/${fileId}`;
+
+                  // Send file
+                  const messageDate = new Date(file.message_date).toLocaleDateString();
+                  await twilioClient.messages.create({
+                    from: process.env.TWILIO_WHATSAPP_NUMBER,
+                    to: from,
+                    body: `📎 ${file.file_name || 'File'} (${messageDate})`,
+                    mediaUrl: [fileUrl]
+                  });
+
+                  console.log(`Sent file: ${file.file_name}`);
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between files
+                } else {
+                  console.error(`File not found: ${filePath}`);
+                }
+              } catch (fileError) {
+                console.error('Error sending file:', fileError);
+              }
+            }
+
+            fileRetrieved = true;
+            res.status(200).send('OK');
+            return;
+          } else {
+            await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
+            fileRetrieved = true;
+            res.status(200).send('OK');
+            return;
+          }
+        }
+      } catch (queryError) {
+        console.error('Error retrieving files:', queryError);
+        // Continue to normal processing if file retrieval fails
+      }
     }
 
     // Handle media (images and audio)
@@ -198,6 +343,68 @@ app.post('/webhook', async (req, res) => {
       if (mediaType && mediaType.startsWith('image/')) {
         console.log('Image received for analysis');
         imageData = `data:${mediaType};base64,${mediaBuffer.toString('base64')}`;
+      }
+    }
+
+    // Save incoming message to database
+    let savedMessage = null;
+    if (process.env.DATABASE_URL && user) {
+      try {
+        // Determine message type
+        let messageType = 'text';
+        if (mediaType) {
+          if (mediaType.startsWith('image/')) messageType = 'image';
+          else if (mediaType.startsWith('audio/')) messageType = 'audio';
+          else if (mediaType.startsWith('video/')) messageType = 'video';
+          else if (mediaType.includes('pdf') || mediaType.includes('document')) messageType = 'document';
+          else messageType = 'media';
+        }
+
+        savedMessage = await saveMessage({
+          userId: user.id,
+          phoneNumber: userPhone,
+          messageSid: messageId,
+          content: transcribedText || incomingMsg || '',
+          direction: 'incoming',
+          messageType: messageType,
+          isForwarded: isForwarded
+        });
+        console.log(`Message saved to database: ${savedMessage.id}`);
+
+        // Save media file if present
+        if (mediaBuffer && mediaUrl && savedMessage) {
+          // Create media directory if it doesn't exist
+          const fs = require('fs');
+          const path = require('path');
+          const mediaDir = path.join(__dirname, 'media');
+          if (!fs.existsSync(mediaDir)) {
+            fs.mkdirSync(mediaDir, { recursive: true });
+          }
+
+          // Generate filename
+          const timestamp = Date.now();
+          const extension = mediaType.split('/')[1]?.split(';')[0] || 'bin';
+          const fileName = `${savedMessage.id}_${timestamp}.${extension}`;
+          const filePath = path.join(mediaDir, fileName);
+
+          // Save file to disk
+          fs.writeFileSync(filePath, mediaBuffer);
+          console.log(`Media file saved: ${filePath}`);
+
+          // Save media metadata to database
+          const savedMedia = await saveMediaFile({
+            messageId: savedMessage.id,
+            fileType: mediaType,
+            fileSize: mediaBuffer.length,
+            fileName: fileName,
+            storageUrl: filePath,
+            twilioMediaUrl: mediaUrl
+          });
+          console.log(`Media metadata saved to database: ${savedMedia.id}`);
+        }
+      } catch (dbError) {
+        console.error('Database error saving message:', dbError);
+        // Continue without database if it fails
       }
     }
 
@@ -425,6 +632,9 @@ For regular responses, be conversational, helpful, and concise.`;
     }
 
     // Send response
+    let sentMessageContent = '';
+    let sentMessageType = 'text';
+
     if (visualData) {
       // Generate appropriate visualization
       const isTable = visualData.type === 'table';
@@ -446,19 +656,43 @@ For regular responses, be conversational, helpful, and concise.`;
 
       console.log(`Generated ${isTable ? 'table' : 'chart'}: ${visualUrl}`);
 
+      sentMessageContent = visualData.message || `Here's your ${isTable ? 'table' : 'chart'}:`;
+      sentMessageType = 'image';
+
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: from,
-        body: visualData.message || `Here's your ${isTable ? 'table' : 'chart'}:`,
+        body: sentMessageContent,
         mediaUrl: [visualUrl]
       });
     } else if (needsImage && !visualData) {
       // For image requests, inform about limitation
       const message = aiResponse + '\n\n(Note: Image generation requires DALL-E integration. Currently showing text response.)';
+      sentMessageContent = message;
       await sendWhatsAppMessage(from, message);
     } else {
       // Send regular text response with automatic splitting
+      sentMessageContent = aiResponse;
       await sendWhatsAppMessage(from, aiResponse);
+    }
+
+    // Save outgoing message to database
+    if (process.env.DATABASE_URL && user && sentMessageContent) {
+      try {
+        await saveMessage({
+          userId: user.id,
+          phoneNumber: userPhone,
+          messageSid: null, // Outgoing messages don't have MessageSid yet
+          content: sentMessageContent,
+          direction: 'outgoing',
+          messageType: sentMessageType,
+          isForwarded: false
+        });
+        console.log(`Outgoing message saved to database`);
+      } catch (dbError) {
+        console.error('Database error saving outgoing message:', dbError);
+        // Continue even if database save fails
+      }
     }
 
     // Clear forwarded message after responding
@@ -487,6 +721,35 @@ app.get('/charts/:chartId', (req, res) => {
   res.setHeader('Content-Type', 'image/png');
   res.setHeader('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
   res.send(chartBuffer);
+});
+
+// Endpoint to serve media files
+app.get('/media/:fileId', (req, res) => {
+  const fileId = req.params.fileId;
+  const fileBuffer = chartStorage.get(fileId);
+
+  if (!fileBuffer) {
+    res.status(404).send('File not found');
+    return;
+  }
+
+  // Determine content type based on file signature
+  let contentType = 'application/octet-stream';
+  if (fileBuffer[0] === 0xFF && fileBuffer[1] === 0xD8) {
+    contentType = 'image/jpeg';
+  } else if (fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50) {
+    contentType = 'image/png';
+  } else if (fileBuffer[0] === 0x47 && fileBuffer[1] === 0x49) {
+    contentType = 'image/gif';
+  } else if (fileBuffer.toString('utf8', 0, 4) === 'OggS') {
+    contentType = 'audio/ogg';
+  } else if (fileBuffer[0] === 0x25 && fileBuffer[1] === 0x50) {
+    contentType = 'application/pdf';
+  }
+
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
+  res.send(fileBuffer);
 });
 
 // Health check endpoint

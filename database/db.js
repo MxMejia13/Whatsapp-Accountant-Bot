@@ -203,6 +203,121 @@ async function initializeDatabase() {
   }
 }
 
+/**
+ * Search for media files by type and user
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} fileType - File type to search for (image, audio, video, document)
+ * @param {number} limit - Number of results to return
+ * @returns {Promise<Array>} Array of media files
+ */
+async function searchMediaFiles(phoneNumber, fileType = null, limit = 10) {
+  let queryText = `
+    SELECT mf.*, m.content as message_content, m.created_at as message_date
+    FROM media_files mf
+    JOIN messages m ON mf.message_id = m.id
+    WHERE m.phone_number = $1
+  `;
+  const params = [phoneNumber];
+
+  if (fileType) {
+    queryText += ` AND mf.file_type LIKE $2`;
+    params.push(`${fileType}%`);
+  }
+
+  queryText += ` ORDER BY m.created_at DESC LIMIT $${params.length + 1}`;
+  params.push(limit);
+
+  const result = await query(queryText, params);
+  return result.rows;
+}
+
+/**
+ * Get media files from a specific date range
+ * @param {string} phoneNumber - User's phone number
+ * @param {Date} startDate - Start date
+ * @param {Date} endDate - End date (optional, defaults to now)
+ * @returns {Promise<Array>} Array of media files
+ */
+async function getMediaByDateRange(phoneNumber, startDate, endDate = new Date()) {
+  const result = await query(
+    `SELECT mf.*, m.content as message_content, m.created_at as message_date
+     FROM media_files mf
+     JOIN messages m ON mf.message_id = m.id
+     WHERE m.phone_number = $1
+       AND m.created_at >= $2
+       AND m.created_at <= $3
+     ORDER BY m.created_at DESC`,
+    [phoneNumber, startDate, endDate]
+  );
+  return result.rows;
+}
+
+/**
+ * Get the most recent media file of a specific type
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} fileType - File type (image, audio, video, document)
+ * @returns {Promise<Object|null>} Most recent media file or null
+ */
+async function getLatestMediaFile(phoneNumber, fileType) {
+  const result = await query(
+    `SELECT mf.*, m.content as message_content, m.created_at as message_date
+     FROM media_files mf
+     JOIN messages m ON mf.message_id = m.id
+     WHERE m.phone_number = $1
+       AND mf.file_type LIKE $2
+     ORDER BY m.created_at DESC
+     LIMIT 1`,
+    [phoneNumber, `${fileType}%`]
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
+/**
+ * Search messages by content (text search)
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} searchTerm - Term to search for
+ * @param {number} limit - Number of results
+ * @returns {Promise<Array>} Array of messages
+ */
+async function searchMessages(phoneNumber, searchTerm, limit = 10) {
+  const result = await query(
+    `SELECT m.*,
+            array_agg(json_build_object(
+              'file_type', mf.file_type,
+              'storage_url', mf.storage_url,
+              'file_name', mf.file_name
+            )) FILTER (WHERE mf.id IS NOT NULL) as media
+     FROM messages m
+     LEFT JOIN media_files mf ON m.id = mf.message_id
+     WHERE m.phone_number = $1
+       AND m.content ILIKE $2
+     GROUP BY m.id
+     ORDER BY m.created_at DESC
+     LIMIT $3`,
+    [phoneNumber, `%${searchTerm}%`, limit]
+  );
+  return result.rows;
+}
+
+/**
+ * Get all media files for a user
+ * @param {string} phoneNumber - User's phone number
+ * @param {number} limit - Number of results
+ * @returns {Promise<Array>} Array of media files
+ */
+async function getAllMediaFiles(phoneNumber, limit = 20) {
+  const result = await query(
+    `SELECT mf.*, m.content as message_content, m.created_at as message_date, m.message_type
+     FROM media_files mf
+     JOIN messages m ON mf.message_id = m.id
+     WHERE m.phone_number = $1
+     ORDER BY m.created_at DESC
+     LIMIT $2`,
+    [phoneNumber, limit]
+  );
+  return result.rows;
+}
+
 module.exports = {
   query,
   pool,
@@ -212,5 +327,10 @@ module.exports = {
   getConversationHistory,
   logUsage,
   getUserStats,
-  initializeDatabase
+  initializeDatabase,
+  searchMediaFiles,
+  getMediaByDateRange,
+  getLatestMediaFile,
+  searchMessages,
+  getAllMediaFiles
 };
