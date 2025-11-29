@@ -21,6 +21,7 @@ const {
   saveMediaFile,
   getConversationHistory,
   searchMediaFiles,
+  searchMediaByDescription,
   getMediaByDateRange,
   getLatestMediaFile,
   searchMessages,
@@ -198,25 +199,20 @@ Determine:
 2. fileType: "image", "audio", "video", "document", or null (any type)
 3. timeframe: "latest" (most recent), "today", "yesterday", "all", or null
 4. infoType: if action is "info", what info do they want? "filename", "count", "date", "all"
+5. searchQuery: extract the key search terms if user is searching for specific content (e.g., "cedula", "invoice", "receipt"), or null if just asking for latest/all files
 
 Examples:
-"Send me the latest audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
-"Dame el audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
-"Send me the audio back" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
-"Envíame la imagen" -> {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null}
-"What's the name of the last image I sent?" -> {"action":"info","fileType":"image","timeframe":"latest","infoType":"filename"}
-"How many photos do I have?" -> {"action":"info","fileType":"image","timeframe":"all","infoType":"count"}
-"Dame el audio de ayer" -> {"action":"retrieve","fileType":"audio","timeframe":"yesterday","infoType":null}
-"List all my documents" -> {"action":"list","fileType":"document","timeframe":"all","infoType":null}
-"What files did I send today?" -> {"action":"list","fileType":null,"timeframe":"today","infoType":null}
-"What's the name of the last audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
-"Como se llama el audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
-"I want the audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
-"Give me that audio file" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"Send me the latest audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null}
+"Dame el audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null}
+"Send me a cedula" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula"}
+"Envíame la factura" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice"}
+"Send me the receipt photo" -> {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"receipt"}
+"What's the name of the last audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null}
+"I want the audio about the meeting" -> {"action":"retrieve","fileType":"audio","timeframe":"all","infoType":null,"searchQuery":"meeting"}
 
 Respond with ONLY the JSON object, nothing else.`
             }],
-            max_tokens: 100
+            max_tokens: 120
           });
 
           let intent;
@@ -241,39 +237,46 @@ Respond with ONLY the JSON object, nothing else.`
           let searchResults = [];
           const fileType = intent.fileType;
 
-          console.log(`🔎 Searching for ${fileType || 'any'} files with timeframe: ${intent.timeframe}`);
+          // Use semantic search if searchQuery is provided
+          if (intent.searchQuery) {
+            console.log(`🔍 Performing semantic search for: "${intent.searchQuery}"`);
+            searchResults = await searchMediaByDescription(userPhone, intent.searchQuery, 10);
+            console.log(`✅ Semantic search found ${searchResults.length} files`);
+          } else {
+            console.log(`🔎 Searching for ${fileType || 'any'} files with timeframe: ${intent.timeframe}`);
 
-          // Execute appropriate query based on timeframe
-          if (intent.timeframe === 'latest') {
-            if (fileType) {
-              const latestFile = await getLatestMediaFile(userPhone, fileType);
-              if (latestFile) {
-                searchResults = [latestFile];
+            // Execute appropriate query based on timeframe
+            if (intent.timeframe === 'latest') {
+              if (fileType) {
+                const latestFile = await getLatestMediaFile(userPhone, fileType);
+                if (latestFile) {
+                  searchResults = [latestFile];
+                }
+              } else {
+                searchResults = await getAllMediaFiles(userPhone, 1);
               }
-            } else {
-              searchResults = await getAllMediaFiles(userPhone, 1);
+            } else if (intent.timeframe === 'yesterday') {
+              const yesterday = new Date();
+              yesterday.setDate(yesterday.getDate() - 1);
+              yesterday.setHours(0, 0, 0, 0);
+              const endOfYesterday = new Date(yesterday);
+              endOfYesterday.setHours(23, 59, 59, 999);
+              searchResults = await getMediaByDateRange(userPhone, yesterday, endOfYesterday);
+              if (fileType) {
+                searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
+              }
+            } else if (intent.timeframe === 'today') {
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              searchResults = await getMediaByDateRange(userPhone, today, new Date());
+              if (fileType) {
+                searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
+              }
+            } else if (intent.timeframe === 'all') {
+              searchResults = fileType
+                ? await searchMediaFiles(userPhone, fileType, 20)
+                : await getAllMediaFiles(userPhone, 20);
             }
-          } else if (intent.timeframe === 'yesterday') {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            yesterday.setHours(0, 0, 0, 0);
-            const endOfYesterday = new Date(yesterday);
-            endOfYesterday.setHours(23, 59, 59, 999);
-            searchResults = await getMediaByDateRange(userPhone, yesterday, endOfYesterday);
-            if (fileType) {
-              searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
-            }
-          } else if (intent.timeframe === 'today') {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            searchResults = await getMediaByDateRange(userPhone, today, new Date());
-            if (fileType) {
-              searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
-            }
-          } else if (intent.timeframe === 'all') {
-            searchResults = fileType
-              ? await searchMediaFiles(userPhone, fileType, 20)
-              : await getAllMediaFiles(userPhone, 20);
           }
 
           // Handle different actions
@@ -494,10 +497,11 @@ Respond with ONLY the JSON object, nothing else.`
           const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // Format: HH-MM-SS
           const extension = mediaType.split('/')[1]?.split(';')[0] || 'bin';
           let descriptiveName = 'file';
+          let fileDescription = null;
 
           try {
             if (messageType === 'image' && imageData) {
-              // Use GPT-4o vision to generate descriptive name
+              // Use GPT-4o vision to generate both filename and description
               const nameCompletion = await openai.chat.completions.create({
                 model: 'gpt-4o',
                 messages: [{
@@ -514,8 +518,23 @@ Respond with ONLY the JSON object, nothing else.`
                 .replace(/[^a-z0-9-]/g, '-')
                 .replace(/-+/g, '-')
                 .substring(0, 50);
+
+              // Generate detailed description for semantic search
+              const descCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [{
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: 'Describe what you see in this image in 1-2 sentences. Include any visible text, objects, people, or important details.' },
+                    { type: 'image_url', image_url: { url: imageData } }
+                  ]
+                }],
+                max_tokens: 100
+              });
+              fileDescription = descCompletion.choices[0].message.content.trim();
+              console.log(`✅ Generated image description: ${fileDescription}`);
             } else if (messageType === 'audio' && transcribedText) {
-              // Use transcription to generate descriptive name
+              // Use transcription to generate descriptive name and description
               console.log(`🎙️ Generating intelligent name for audio. Transcription: "${transcribedText.substring(0, 100)}..."`);
               const summaryCompletion = await openai.chat.completions.create({
                 model: 'gpt-4o',
@@ -543,6 +562,10 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
                 .replace(/-+/g, '-')
                 .substring(0, 50);
               console.log(`✅ Generated audio filename: ${descriptiveName}`);
+
+              // Use transcription as the description for semantic search
+              fileDescription = transcribedText.substring(0, 500); // Limit to 500 chars
+              console.log(`✅ Using transcription as audio description`);
             } else if (messageType === 'document') {
               descriptiveName = 'document';
             }
@@ -564,6 +587,7 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
             fileType: mediaType,
             fileSize: mediaBuffer.length,
             fileName: fileName,
+            fileDescription: fileDescription,
             storageUrl: filePath,
             twilioMediaUrl: mediaUrl
           });
