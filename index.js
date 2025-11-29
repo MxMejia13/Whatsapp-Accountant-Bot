@@ -759,7 +759,7 @@ Respond with ONLY the JSON:`
           try {
             // Check if user provided a custom name via "como [name]" or "as [name]"
             if (imageOperationIntent && imageOperationIntent.customName) {
-              // Use the custom name provided by the user
+              // Use the custom name provided by the user for FILENAME only
               descriptiveName = imageOperationIntent.customName
                 .toLowerCase()
                 .replace(/[^a-z0-9-\s]/g, '') // Remove special chars but keep spaces
@@ -768,10 +768,22 @@ Respond with ONLY the JSON:`
                 .substring(0, 50);
               console.log(`✅ Using custom filename: ${descriptiveName}`);
 
-              // OPTIMIZATION: Use custom name as description too (skip OpenAI call for speed)
-              // The custom name is already descriptive enough for semantic search
-              fileDescription = imageOperationIntent.customName;
-              console.log(`✅ Using custom name as description (optimization)`);
+              // Still generate description from image analysis (custom name is for filename only)
+              if (messageType === 'image' && imageData) {
+                const descCompletion = await openai.chat.completions.create({
+                  model: 'gpt-4o',
+                  messages: [{
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: 'Describe what you see in this image in 1-2 sentences. Include any visible text, objects, people, or important details.' },
+                      { type: 'image_url', image_url: { url: imageData } }
+                    ]
+                  }],
+                  max_tokens: 100
+                });
+                fileDescription = descCompletion.choices[0].message.content.trim();
+                console.log(`✅ Generated image description: ${fileDescription}`);
+              }
 
             } else if (messageType === 'image' && imageData) {
               // OPTIMIZATION: Generate BOTH filename and description in ONE API call
