@@ -282,6 +282,7 @@ Respond with ONLY a JSON object:
   "timeframe": "latest|today|yesterday|all|null",
   "infoType": "filename|count|date|all|null",
   "searchQuery": "KEY document terms with translations",
+  "originalTerm": "exact term user said",
   "confidence": "high|medium|low"
 }
 
@@ -294,57 +295,67 @@ Respond with ONLY a JSON object:
    - factura → "factura invoice"
    - recibo → "recibo receipt"
    - foto/imagen → "foto photo image"
-4. Keep person names if mentioned (e.g., "Max Mejia")
+4. **IMPORTANT**: When user says "mi/my [document]", DO NOT add their name
+   - Files are already filtered by phone number
+   - Adding name makes search too strict (description may not contain it)
+   - "mi pasaporte" → "pasaporte passport" (NO "Max")
+5. ONLY add person names if EXPLICITLY mentioned by user:
+   - "pasaporte de Max" → "pasaporte passport Max"
+   - "cedula Max Mejia" → "cedula ID identification Max Mejia"
 
-**USE CONTEXT - If user says "mi cedula" or "my ID", understand they mean THEIR OWN document:**
-- User "Max" asks "mi cedula" → search for "cedula ID identification Max"
-- User "Max" asks "enviame la imagen de la cedula" → search for "cedula ID identification Max"
-- User "Max" asks "enviame la cedula Max Mejia" → search for "cedula ID identification Max Mejia"
+**originalTerm:** The exact document type the user mentioned (for error messages)
+- "enviame mi pasaporte" → originalTerm: "pasaporte"
+- "send me my ID" → originalTerm: "ID"
 
 **Understanding Intent Examples:**
 
-"Mandame una foto de mi cedula" from Max → Extract "cedula" + add translations + user's name
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification Max","confidence":"high"}
+"Mandame una foto de mi cedula" from Max → Extract "cedula" + add translations (NO name - it's "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification","originalTerm":"cedula","confidence":"high"}
 
-"Enviame la imagen de la cedula" from Max → Extract "cedula" + add translations + user's name (implied)
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification Max","confidence":"high"}
+"Enviame la imagen de la cedula" from Max → Extract "cedula" + add translations (NO name - implied "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification","originalTerm":"cedula","confidence":"high"}
 
-"enviame mi pasaporte" from Max → Extract "pasaporte" + add translations + user's name
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport Max","confidence":"high"}
+"enviame mi pasaporte" from Max → Extract "pasaporte" + add translations (NO name - it's "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport","originalTerm":"pasaporte","confidence":"high"}
 
-"enviame cedula de max mejia" → Extract "cedula" + add translations + explicit name
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification max mejia","confidence":"high"}
+"mandame mi pasaporte" from Max → Extract "pasaporte" + add translations (NO name - it's "mi")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport","originalTerm":"pasaporte","confidence":"high"}
+
+"enviame cedula de max mejia" → Extract "cedula" + add translations + EXPLICIT name
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification max mejia","originalTerm":"cedula","confidence":"high"}
+
+"pasaporte Max Mejia" → User explicitly mentioned name
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"pasaporte passport Max Mejia","originalTerm":"pasaporte","confidence":"high"}
 
 "enviame la imagen que te habia enviado" → User wants a previous image
-→ {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null,"searchQuery":null,"confidence":"medium"}
+→ {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null,"searchQuery":null,"originalTerm":"imagen","confidence":"medium"}
 
 "Dame el audio" → User wants latest audio file
-→ {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null,"confidence":"high"}
+→ {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null,"searchQuery":null,"originalTerm":"audio","confidence":"high"}
 
 "Como se llama el ultimo audio?" → User wants filename info
-→ {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null,"confidence":"high"}
+→ {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null,"originalTerm":"audio","confidence":"high"}
 
-"Envíame la factura de marzo" → User wants invoice from March
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura marzo","confidence":"high"}
+"Envíame la factura de marzo" → User wants invoice from March (keep "marzo" - it's specific context)
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice marzo","originalTerm":"factura","confidence":"high"}
 
-"Send me my ID" → User wants ID
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID","confidence":"high"}
+"Send me my ID" from Max → Extract "ID" + add Spanish translation (NO name - it's "my")
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID cedula identification","originalTerm":"ID","confidence":"high"}
 
-"Enviaste el texto y no la imagen, enviame la imagen de la cedula de Max Mejia" → Ignore complaint, extract document + translations
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification Max Mejia","confidence":"high"}
-
-"Send me my ID" from Max → Extract "ID" + add Spanish translation + user's name
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID cedula identification Max","confidence":"high"}
+"Enviaste el texto y no la imagen, enviame la imagen de la cedula de Max Mejia" → Ignore complaint, EXPLICIT name mentioned
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification Max Mejia","originalTerm":"cedula","confidence":"high"}
 
 **Rules Summary:**
-- searchQuery: Extract document type + ADD translations + person names
+- searchQuery: Extract document type + ADD translations + person names (ONLY if explicitly mentioned)
 - Example: "pasaporte" → "pasaporte passport"
-- Example: "mi cedula" from Max → "cedula ID identification Max"
+- Example: "mi cedula" → "cedula ID identification" (NO name - files filtered by phone)
+- Example: "cedula Max Mejia" → "cedula ID identification Max Mejia" (name explicitly mentioned)
 - **REMOVE action verbs:** "enviame", "manda", "dame", "send" are NOT part of search
-- **USE USER CONTEXT:** If they say "mi/my [document]", add user's name to searchQuery
+- **DO NOT add user's name for "mi/my":** Files are already filtered by their phone number
+- **ONLY add names when EXPLICITLY mentioned:** "pasaporte de Juan", "cedula Max"
+- originalTerm: Just the document type user said (for clean error messages)
 - Ignore complaint/context words like "enviaste el texto y no la imagen"
 - Set confidence based on clarity of request
-- If user asks for "la cedula" without specifying whose, assume they mean THEIR OWN (add their name)
 
 Respond with ONLY the JSON object:`
             }],
@@ -483,8 +494,8 @@ Respond with ONLY the JSON object:`
 
             if (searchResults.length === 0) {
               console.log(`⚠️  No ${fileType || 'media'} files found for retrieval`);
-              // Show what was actually searched for (search query, not full message)
-              const searchedFor = intent.searchQuery || (fileType ? `archivos de tipo ${fileType}` : 'archivos');
+              // Show what user actually said (originalTerm), not the expanded search query
+              const searchedFor = intent.originalTerm || (fileType ? `archivos de tipo ${fileType}` : 'archivos');
               await sendWhatsAppMessage(from, `❌ No encontré archivos que coincidan con: ${searchedFor}`);
               res.status(200).send('OK');
               return;
