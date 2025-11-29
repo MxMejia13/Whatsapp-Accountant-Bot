@@ -1,15 +1,4 @@
 require('dotenv').config();
-
-// Debug: Log environment variables
-console.log('🔍 Environment Check:');
-console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('DATABASE_URL length:', process.env.DATABASE_URL ? process.env.DATABASE_URL.length : 0);
-console.log('PORT:', process.env.PORT);
-console.log('NODE_ENV:', process.env.NODE_ENV);
-if (process.env.DATABASE_URL) {
-  console.log('DATABASE_URL prefix:', process.env.DATABASE_URL.substring(0, 20) + '...');
-}
-
 const express = require('express');
 const twilio = require('twilio');
 const OpenAI = require('openai');
@@ -497,9 +486,22 @@ Respond with ONLY the JSON object, nothing else.`
           // Create user-specific media directory if it doesn't exist
           const fs = require('fs');
           const path = require('path');
-          const userMediaDir = path.join(__dirname, 'media', userPhone);
+
+          // Map message type to folder name
+          const mediaTypeFolders = {
+            'image': 'images',
+            'audio': 'audio',
+            'video': 'videos',
+            'document': 'documents'
+          };
+
+          const mediaTypeFolder = mediaTypeFolders[messageType] || 'other';
+          const userMediaDir = path.join(__dirname, 'media', userPhone, mediaTypeFolder);
+
+          // Create directory structure: media/{phone_number}/{media_type}/
           if (!fs.existsSync(userMediaDir)) {
             fs.mkdirSync(userMediaDir, { recursive: true });
+            console.log(`📁 Created directory: ${userMediaDir}`);
           }
 
           // Generate intelligent filename based on content
