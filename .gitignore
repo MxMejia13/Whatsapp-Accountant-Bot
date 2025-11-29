@@ -36,5 +36,6 @@ Thumbs.db
 dist/
 build/
 
-# Media files (stored locally)
-media/
+# Media files (stored locally, but keep directory structure)
+media/**/*
+!media/**/.gitkeep
