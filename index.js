@@ -382,7 +382,9 @@ app.post('/webhook', async (req, res) => {
           }
 
           // Generate intelligent filename based on content
-          const timestamp = Date.now();
+          const now = new Date();
+          const dateStr = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+          const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // Format: HH-MM-SS
           const extension = mediaType.split('/')[1]?.split(';')[0] || 'bin';
           let descriptiveName = 'file';
 
@@ -428,7 +430,7 @@ app.post('/webhook', async (req, res) => {
             descriptiveName = messageType || 'file';
           }
 
-          const fileName = `${savedMessage.id}_${descriptiveName}_${timestamp}.${extension}`;
+          const fileName = `${descriptiveName}_${dateStr}_${timeStr}.${extension}`;
           const filePath = path.join(mediaDir, fileName);
 
           // Save file to disk
