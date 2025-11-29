@@ -205,6 +205,23 @@ app.post('/webhook', async (req, res) => {
         const path = require('path');
 
         try {
+          // DIAGNOSTIC LOGGING
+          console.log('🔍 File selection attempt:');
+          console.log(`  - Selected: #${selection}`);
+          console.log(`  - File name: ${selectedFile.file_name}`);
+          console.log(`  - Storage URL: ${selectedFile.storage_url}`);
+          console.log(`  - File exists: ${fs.existsSync(selectedFile.storage_url)}`);
+
+          // Check what's in the directory
+          const fileDir = path.dirname(selectedFile.storage_url);
+          if (fs.existsSync(fileDir)) {
+            const filesInDir = fs.readdirSync(fileDir);
+            console.log(`  - Directory exists: ${fileDir}`);
+            console.log(`  - Files in directory: ${filesInDir.join(', ')}`);
+          } else {
+            console.log(`  - Directory does NOT exist: ${fileDir}`);
+          }
+
           if (fs.existsSync(selectedFile.storage_url)) {
             const fileBuffer = fs.readFileSync(selectedFile.storage_url);
             const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -226,6 +243,7 @@ app.post('/webhook', async (req, res) => {
             console.log(`✅ Sent file: ${selectedFile.file_name}`);
             await sendWhatsAppMessage(from, '✅ Enviada!');
           } else {
+            console.log(`❌ File not found at: ${selectedFile.storage_url}`);
             await sendWhatsAppMessage(from, '❌ Lo siento, no encontré ese archivo en el almacenamiento.');
           }
         } catch (error) {
@@ -511,6 +529,22 @@ Respond with ONLY the JSON object:`
               console.log(`✅ Exactly 1 file found - sending directly: ${file.file_name}`);
 
               try {
+                // DIAGNOSTIC LOGGING
+                console.log('🔍 File retrieval attempt:');
+                console.log(`  - File name: ${file.file_name}`);
+                console.log(`  - Storage URL: ${file.storage_url}`);
+                console.log(`  - File exists: ${fs.existsSync(file.storage_url)}`);
+
+                // Check what's in the directory
+                const fileDir = path.dirname(file.storage_url);
+                if (fs.existsSync(fileDir)) {
+                  const filesInDir = fs.readdirSync(fileDir);
+                  console.log(`  - Directory exists: ${fileDir}`);
+                  console.log(`  - Files in directory: ${filesInDir.join(', ')}`);
+                } else {
+                  console.log(`  - Directory does NOT exist: ${fileDir}`);
+                }
+
                 if (fs.existsSync(file.storage_url)) {
                   const fileBuffer = fs.readFileSync(file.storage_url);
                   const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -531,6 +565,7 @@ Respond with ONLY the JSON object:`
 
                   console.log(`✅ Sent file: ${file.file_name}`);
                 } else {
+                  console.log(`❌ File not found at: ${file.storage_url}`);
                   await sendWhatsAppMessage(from, '❌ Encontré el archivo pero no está en el almacenamiento.');
                 }
               } catch (fileError) {
