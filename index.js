@@ -71,6 +71,9 @@ const chartStorage = new Map();
 // Store pending file deletions for confirmation
 const pendingDeletions = new Map();
 
+// Store pending file retrievals when multiple matches found
+const pendingFileRetrievals = new Map();
+
 // Helper function: Split long messages into chunks
 function splitMessage(message, maxLength = 1500) {
   if (message.length <= maxLength) {
@@ -178,6 +181,59 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Handle pending file retrieval confirmations
+    if (pendingFileRetrievals.has(from) && incomingMsg && incomingMsg.trim().match(/^\d+$/)) {
+      const selection = parseInt(incomingMsg.trim());
+      const pendingFiles = pendingFileRetrievals.get(from);
+
+      console.log(`📋 User selected option ${selection} from ${pendingFiles.length} files`);
+
+      if (selection >= 1 && selection <= pendingFiles.length) {
+        const selectedFile = pendingFiles[selection - 1];
+
+        // Send the selected file
+        const fs = require('fs');
+        const path = require('path');
+
+        try {
+          if (fs.existsSync(selectedFile.storage_url)) {
+            const fileBuffer = fs.readFileSync(selectedFile.storage_url);
+            const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            chartStorage.set(fileId, fileBuffer);
+            setTimeout(() => chartStorage.delete(fileId), 10 * 60 * 1000);
+
+            const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || `${req.hostname}`;
+            const protocol = req.protocol || 'https';
+            const fileUrl = `${protocol}://${publicDomain}/media/${fileId}`;
+
+            const messageDate = new Date(selectedFile.message_date).toLocaleDateString();
+            await twilioClient.messages.create({
+              from: process.env.TWILIO_WHATSAPP_NUMBER,
+              to: from,
+              body: `📎 ${selectedFile.file_name} (${messageDate})`,
+              mediaUrl: [fileUrl]
+            });
+
+            console.log(`✅ Sent file: ${selectedFile.file_name}`);
+            await sendWhatsAppMessage(from, '✅ Enviada!');
+          } else {
+            await sendWhatsAppMessage(from, '❌ Lo siento, no encontré ese archivo en el almacenamiento.');
+          }
+        } catch (error) {
+          console.error('Error sending selected file:', error);
+          await sendWhatsAppMessage(from, '❌ Error al enviar el archivo.');
+        }
+
+        // Clear pending retrieval
+        pendingFileRetrievals.delete(from);
+      } else {
+        await sendWhatsAppMessage(from, `❌ Opción inválida. Por favor elige un número entre 1 y ${pendingFiles.length}.`);
+      }
+
+      res.status(200).send('OK');
+      return;
+    }
+
     // IMPORTANT: Only handle file retrieval queries if NO media is attached
     // If media is attached, we'll save it first and confirm - NOT search for files
     const hasMediaAttached = numMedia > 0;
@@ -193,9 +249,9 @@ app.post('/webhook', async (req, res) => {
         if (isFileQuery) {
           console.log('🔍 Potential file query detected:', incomingMsg);
 
-          // Use GPT-4o to interpret the user's intent with context awareness
+          // Use GPT-4o-mini for fast intent detection
           const intentCompletion = await openai.chat.completions.create({
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             messages: [{
               role: 'user',
               content: `You are analyzing a user's request for files. Understand their INTENT regardless of exact wording.
@@ -375,7 +431,7 @@ Respond with ONLY the JSON object:`
 
             if (searchResults.length === 0) {
               console.log(`⚠️  No ${fileType || 'media'} files found for retrieval`);
-              await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
+              await sendWhatsAppMessage(from, `❌ No encontré archivos que coincidan con "${incomingMsg}".`);
               res.status(200).send('OK');
               return;
             }
@@ -383,28 +439,23 @@ Respond with ONLY the JSON object:`
             const fs = require('fs');
             const path = require('path');
 
-            await sendWhatsAppMessage(from, `📁 Found ${searchResults.length} file(s). Sending now...`);
+            // SMART RETRIEVAL: If only 1 file, send it. If multiple, ask for confirmation.
+            if (searchResults.length === 1) {
+              // Only 1 file found - send it directly
+              const file = searchResults[0];
+              console.log(`✅ Exactly 1 file found - sending directly: ${file.file_name}`);
 
-            for (const file of searchResults.slice(0, 5)) { // Limit to 5 files
               try {
-                // Read file from storage
-                const filePath = file.storage_url;
-                if (fs.existsSync(filePath)) {
-                  const fileBuffer = fs.readFileSync(filePath);
-
-                  // Generate unique ID and store in chartStorage for serving
+                if (fs.existsSync(file.storage_url)) {
+                  const fileBuffer = fs.readFileSync(file.storage_url);
                   const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                   chartStorage.set(fileId, fileBuffer);
-
-                  // Clean up after 10 minutes
                   setTimeout(() => chartStorage.delete(fileId), 10 * 60 * 1000);
 
-                  // Get public URL
                   const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || `${req.hostname}`;
                   const protocol = req.protocol || 'https';
                   const fileUrl = `${protocol}://${publicDomain}/media/${fileId}`;
 
-                  // Send file
                   const messageDate = new Date(file.message_date).toLocaleDateString();
                   await twilioClient.messages.create({
                     from: process.env.TWILIO_WHATSAPP_NUMBER,
@@ -413,18 +464,46 @@ Respond with ONLY the JSON object:`
                     mediaUrl: [fileUrl]
                   });
 
-                  console.log(`Sent file: ${file.file_name}`);
-                  await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between files
+                  console.log(`✅ Sent file: ${file.file_name}`);
                 } else {
-                  console.error(`File not found: ${filePath}`);
+                  await sendWhatsAppMessage(from, '❌ Encontré el archivo pero no está en el almacenamiento.');
                 }
               } catch (fileError) {
                 console.error('Error sending file:', fileError);
+                await sendWhatsAppMessage(from, '❌ Error al enviar el archivo.');
               }
-            }
 
-            res.status(200).send('OK');
-            return;
+              res.status(200).send('OK');
+              return;
+
+            } else {
+              // Multiple files found - ask user to choose
+              console.log(`📋 Multiple files found (${searchResults.length}) - asking user to choose`);
+
+              // Store pending retrieval
+              pendingFileRetrievals.set(from, searchResults.slice(0, 10)); // Limit to 10 options
+
+              // Build selection message
+              let selectionMsg = `📁 Encontré ${searchResults.length} archivo(s) que coinciden. ¿Cuál quieres?\n\n`;
+              searchResults.slice(0, 10).forEach((file, index) => {
+                const date = new Date(file.message_date).toLocaleDateString();
+                selectionMsg += `${index + 1}. ${file.file_name}\n   📅 ${date}\n`;
+                if (file.file_description) {
+                  selectionMsg += `   📝 ${file.file_description.substring(0, 60)}${file.file_description.length > 60 ? '...' : ''}\n`;
+                }
+                selectionMsg += '\n';
+              });
+
+              if (searchResults.length > 10) {
+                selectionMsg += `... y ${searchResults.length - 10} más.\n\n`;
+              }
+
+              selectionMsg += `Responde con el número (1-${Math.min(searchResults.length, 10)}) del archivo que quieres.`;
+
+              await sendWhatsAppMessage(from, selectionMsg);
+              res.status(200).send('OK');
+              return;
+            }
           }
         }
       } catch (queryError) {
@@ -504,7 +583,7 @@ Respond with ONLY the JSON object:`
       try {
         console.log('🔍 Analyzing image operation intent...');
         const intentAnalysis = await openai.chat.completions.create({
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini', // Fast model for simple intent detection
           messages: [{
             role: 'user',
             content: `Analyze the user's message accompanying an image they sent. Determine their intent.
@@ -654,60 +733,62 @@ Respond with ONLY the JSON:`
                 .substring(0, 50);
               console.log(`✅ Using custom filename: ${descriptiveName}`);
 
-              // Still generate description for semantic search
-              if (messageType === 'image' && imageData) {
-                const descCompletion = await openai.chat.completions.create({
-                  model: 'gpt-4o',
-                  messages: [{
-                    role: 'user',
-                    content: [
-                      { type: 'text', text: 'Describe what you see in this image in 1-2 sentences. Include any visible text, objects, people, or important details.' },
-                      { type: 'image_url', image_url: { url: imageData } }
-                    ]
-                  }],
-                  max_tokens: 100
-                });
-                fileDescription = descCompletion.choices[0].message.content.trim();
-                console.log(`✅ Generated image description: ${fileDescription}`);
-              }
-            } else if (messageType === 'image' && imageData) {
-              // Use GPT-4o vision to generate both filename and description
-              const nameCompletion = await openai.chat.completions.create({
-                model: 'gpt-4o',
-                messages: [{
-                  role: 'user',
-                  content: [
-                    { type: 'text', text: 'Describe this image in 2-4 words for a filename (lowercase, use hyphens instead of spaces, no special characters). Examples: "invoice-march-2024", "family-photo", "product-receipt"' },
-                    { type: 'image_url', image_url: { url: imageData } }
-                  ]
-                }],
-                max_tokens: 20
-              });
-              descriptiveName = nameCompletion.choices[0].message.content.trim()
-                .toLowerCase()
-                .replace(/[^a-z0-9-]/g, '-')
-                .replace(/-+/g, '-')
-                .substring(0, 50);
+              // OPTIMIZATION: Use custom name as description too (skip OpenAI call for speed)
+              // The custom name is already descriptive enough for semantic search
+              fileDescription = imageOperationIntent.customName;
+              console.log(`✅ Using custom name as description (optimization)`);
 
-              // Generate detailed description for semantic search
-              const descCompletion = await openai.chat.completions.create({
+            } else if (messageType === 'image' && imageData) {
+              // OPTIMIZATION: Generate BOTH filename and description in ONE API call
+              const combinedCompletion = await openai.chat.completions.create({
                 model: 'gpt-4o',
                 messages: [{
                   role: 'user',
                   content: [
-                    { type: 'text', text: 'Describe what you see in this image in 1-2 sentences. Include any visible text, objects, people, or important details.' },
+                    {
+                      type: 'text',
+                      text: `Analyze this image and provide:
+1. A short filename (2-4 words, lowercase, hyphens only, no quotes)
+2. A detailed description (1-2 sentences with all visible details)
+
+Respond in JSON format:
+{
+  "filename": "short-descriptive-name",
+  "description": "Detailed description of the image including visible text, objects, and important details."
+}
+
+Examples:
+- Invoice → {"filename":"invoice-march-2024","description":"Invoice document for March 2024 showing payment details."}
+- ID card → {"filename":"dominican-id-card","description":"Dominican Republic identification card with photo and personal information."}
+
+Respond with ONLY the JSON:`
+                    },
                     { type: 'image_url', image_url: { url: imageData } }
                   ]
                 }],
-                max_tokens: 100
+                max_tokens: 150
               });
-              fileDescription = descCompletion.choices[0].message.content.trim();
-              console.log(`✅ Generated image description: ${fileDescription}`);
+
+              try {
+                const result = JSON.parse(combinedCompletion.choices[0].message.content.trim().match(/\{[\s\S]*\}/)[0]);
+                descriptiveName = result.filename
+                  .toLowerCase()
+                  .replace(/[^a-z0-9-]/g, '-')
+                  .replace(/-+/g, '-')
+                  .substring(0, 50);
+                fileDescription = result.description;
+                console.log(`✅ Generated filename: ${descriptiveName} & description in ONE call (optimized)`);
+              } catch (parseError) {
+                // Fallback to simple name if JSON parsing fails
+                descriptiveName = 'image';
+                fileDescription = combinedCompletion.choices[0].message.content.trim();
+                console.log(`⚠️ JSON parsing failed, using fallback`);
+              }
             } else if (messageType === 'audio' && transcribedText) {
               // Use transcription to generate descriptive name and description
               console.log(`🎙️ Generating intelligent name for audio. Transcription: "${transcribedText.substring(0, 100)}..."`);
               const summaryCompletion = await openai.chat.completions.create({
-                model: 'gpt-4o',
+                model: 'gpt-4o-mini', // Fast model for simple text summarization
                 messages: [{
                   role: 'user',
                   content: `Create a short filename (2-4 words max, lowercase, hyphens only, no quotes) that describes what this audio is about:
