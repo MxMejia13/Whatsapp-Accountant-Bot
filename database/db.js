@@ -101,16 +101,17 @@ async function saveMediaFile(mediaData) {
     fileType,
     fileSize,
     fileName,
+    fileDescription,
     storageUrl,
     twilioMediaUrl
   } = mediaData;
 
   const result = await query(
     `INSERT INTO media_files
-     (message_id, file_type, file_size, file_name, storage_url, twilio_media_url)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     (message_id, file_type, file_size, file_name, file_description, storage_url, twilio_media_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [messageId, fileType, fileSize, fileName, storageUrl, twilioMediaUrl]
+    [messageId, fileType, fileSize, fileName, fileDescription || null, storageUrl, twilioMediaUrl]
   );
 
   return result.rows[0];
@@ -318,6 +319,27 @@ async function getAllMediaFiles(phoneNumber, limit = 20) {
   return result.rows;
 }
 
+/**
+ * Search media files by description content (semantic search)
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} searchTerm - Term to search for in descriptions
+ * @param {number} limit - Number of results
+ * @returns {Promise<Array>} Array of media files
+ */
+async function searchMediaByDescription(phoneNumber, searchTerm, limit = 10) {
+  const result = await query(
+    `SELECT mf.*, m.content as message_content, m.created_at as message_date, m.message_type
+     FROM media_files mf
+     JOIN messages m ON mf.message_id = m.id
+     WHERE m.phone_number = $1
+       AND (mf.file_description ILIKE $2 OR mf.file_name ILIKE $2)
+     ORDER BY m.created_at DESC
+     LIMIT $3`,
+    [phoneNumber, `%${searchTerm}%`, limit]
+  );
+  return result.rows;
+}
+
 module.exports = {
   query,
   pool,
@@ -332,5 +354,6 @@ module.exports = {
   getMediaByDateRange,
   getLatestMediaFile,
   searchMessages,
-  getAllMediaFiles
+  getAllMediaFiles,
+  searchMediaByDescription
 };

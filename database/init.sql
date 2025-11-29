@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     file_type VARCHAR(50), -- image/jpeg, audio/ogg, application/pdf, etc.
     file_size INTEGER,
     file_name VARCHAR(255),
+    file_description TEXT, -- AI-generated description of file content for semantic search
     storage_url TEXT, -- URL where file is stored (S3, R2, etc.)
     twilio_media_url TEXT, -- Original Twilio URL
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

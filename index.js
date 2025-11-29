@@ -29,9 +29,14 @@ const {
 
 // Initialize database if DATABASE_URL is configured
 if (process.env.DATABASE_URL) {
+  console.log('✅ DATABASE_URL is configured');
   initializeDatabase().catch(err => {
     console.log('⚠️  Database initialization skipped (tables may already exist)');
   });
+} else {
+  console.error('❌ WARNING: DATABASE_URL is NOT configured!');
+  console.error('❌ File storage and retrieval will NOT work without a database!');
+  console.error('❌ Please add DATABASE_URL environment variable in Railway');
 }
 
 const app = express();
