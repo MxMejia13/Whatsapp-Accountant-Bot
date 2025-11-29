@@ -174,9 +174,11 @@ app.post('/webhook', async (req, res) => {
 
       try {
         // Use AI to detect if this is a file-related query
-        const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy/i);
+        const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy|how many|cuánto|list|lista/i);
 
         if (isFileQuery) {
+          console.log('🔍 Potential file query detected:', incomingMsg);
+
           // Use GPT-4o to interpret the user's intent
           const intentCompletion = await openai.chat.completions.create({
             model: 'gpt-4o',
@@ -199,6 +201,8 @@ Examples:
 "Dame el audio de ayer" -> {"action":"retrieve","fileType":"audio","timeframe":"yesterday","infoType":null}
 "List all my documents" -> {"action":"list","fileType":"document","timeframe":"all","infoType":null}
 "What files did I send today?" -> {"action":"list","fileType":null,"timeframe":"today","infoType":null}
+"What's the name of the last audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
+"Como se llama el audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
 
 Respond with ONLY the JSON object, nothing else.`
             }],
@@ -208,22 +212,26 @@ Respond with ONLY the JSON object, nothing else.`
           let intent;
           try {
             const intentText = intentCompletion.choices[0].message.content.trim();
+            console.log('📋 Intent response:', intentText);
             intent = JSON.parse(intentText.match(/\{[\s\S]*\}/)[0]);
           } catch (parseError) {
-            console.error('Failed to parse intent:', parseError);
+            console.error('❌ Failed to parse intent:', parseError);
             // Continue to normal processing if intent parsing fails
             throw new Error('Intent parsing failed');
           }
 
-          console.log('Detected intent:', intent);
+          console.log('✅ Detected intent:', JSON.stringify(intent));
 
           // If not a file query, continue to normal processing
           if (intent.action === 'none') {
+            console.log('ℹ️  Not a file query, continuing to normal chat');
             throw new Error('Not a file query');
           }
 
           let searchResults = [];
           const fileType = intent.fileType;
+
+          console.log(`🔎 Searching for ${fileType || 'any'} files with timeframe: ${intent.timeframe}`);
 
           // Execute appropriate query based on timeframe
           if (intent.timeframe === 'latest') {
@@ -261,7 +269,10 @@ Respond with ONLY the JSON object, nothing else.`
           // Handle different actions
           if (intent.action === 'info') {
             // Provide information about files
+            console.log(`📊 Found ${searchResults.length} files for info query`);
+
             if (searchResults.length === 0) {
+              console.log(`⚠️  No ${fileType || 'media'} files found`);
               await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
               res.status(200).send('OK');
               return;
@@ -270,6 +281,7 @@ Respond with ONLY the JSON object, nothing else.`
             if (intent.infoType === 'filename') {
               const file = searchResults[0];
               const messageDate = new Date(file.message_date).toLocaleDateString();
+              console.log(`📎 Returning filename: ${file.file_name}`);
               await sendWhatsAppMessage(from, `📎 The file is named: "${file.file_name}"\n📅 Date: ${messageDate}`);
             } else if (intent.infoType === 'count') {
               await sendWhatsAppMessage(from, `📊 You have ${searchResults.length} ${fileType || 'media'} file(s) saved.`);
