@@ -25,7 +25,8 @@ const {
   getMediaByDateRange,
   getLatestMediaFile,
   searchMessages,
-  getAllMediaFiles
+  getAllMediaFiles,
+  deleteMediaFile
 } = require('./database/db');
 
 // Initialize database if DATABASE_URL is configured
@@ -66,6 +67,9 @@ const forwardedMessages = new Map();
 
 // Store generated charts temporarily (chartId -> buffer)
 const chartStorage = new Map();
+
+// Store pending file deletions for confirmation
+const pendingDeletions = new Map();
 
 // Helper function: Split long messages into chunks
 function splitMessage(message, maxLength = 1500) {
@@ -778,12 +782,29 @@ Respond with ONLY the JSON:`
     // Build conversation context for OpenAI
     const systemPrompt = `You are an intelligent WhatsApp assistant with deep contextual understanding. You analyze what users say, understand their intent regardless of wording, and provide helpful responses.${userTitle ? `\n\nIMPORTANT: You are speaking with ${userTitle}. Always address them respectfully using this title.` : ''}${forwardedContext}
 
+## LANGUAGE:
+**ALWAYS respond in SPANISH by default.** If the user writes in English or another language, respond in that language. But default to Spanish for all responses.
+
 ## CORE PRINCIPLES:
 1. **Understand Intent**: Interpret what the user MEANS, not just what they literally say
 2. **Be Proactive**: When you receive files, automatically save them - don't ask what to do
 3. **Use Context**: Remember conversation history and user patterns
 4. **Confirm When Unsure**: If genuinely uncertain about user's intent, ask for clarification
-5. **Learn**: Each interaction helps you understand the user better
+5. **Be Honest**: If you CAN'T do something, SAY SO. Never pretend you did something when you didn't
+6. **Learn**: Each interaction helps you understand the user better
+
+## HONESTY ABOUT CAPABILITIES:
+
+**If you cannot do something, be HONEST:**
+
+WRONG: "✅ Hecho!" (when you didn't actually do it)
+WRONG: "He eliminado el archivo" (when deletion failed or you can't delete)
+
+RIGHT: "Lo siento, no puedo hacer eso porque [reason]"
+RIGHT: "No tengo acceso a esa funcionalidad todavía"
+RIGHT: "Intenté hacer eso pero encontré un error: [error]"
+
+**Never claim success for actions you didn't perform.**
 
 ## WHEN USER SENDS FILES:
 

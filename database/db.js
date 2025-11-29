@@ -340,6 +340,19 @@ async function searchMediaByDescription(phoneNumber, searchTerm, limit = 10) {
   return result.rows;
 }
 
+/**
+ * Delete a media file from database and optionally from disk
+ * @param {number} mediaId - ID of the media file to delete
+ * @returns {Promise<Object>} Deleted media record
+ */
+async function deleteMediaFile(mediaId) {
+  const result = await query(
+    'DELETE FROM media_files WHERE id = $1 RETURNING *',
+    [mediaId]
+  );
+  return result.rows[0];
+}
+
 module.exports = {
   query,
   pool,
@@ -355,5 +368,6 @@ module.exports = {
   getLatestMediaFile,
   searchMessages,
   getAllMediaFiles,
-  searchMediaByDescription
+  searchMediaByDescription,
+  deleteMediaFile
 };
