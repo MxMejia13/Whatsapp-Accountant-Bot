@@ -255,7 +255,7 @@ app.post('/webhook', async (req, res) => {
             model: 'gpt-4o-mini',
             messages: [{
               role: 'user',
-              content: `You are analyzing a user's request for files. Understand their INTENT regardless of exact wording.
+              content: `You are analyzing a user's request for files. Extract the KEY TERMS they mention.
 
 User query: "${incomingMsg}"
 
@@ -266,14 +266,19 @@ Respond with ONLY a JSON object:
   "fileType": "image|audio|video|document|null",
   "timeframe": "latest|today|yesterday|all|null",
   "infoType": "filename|count|date|all|null",
-  "searchQuery": "key terms or null",
+  "searchQuery": "ONLY key terms from user message or null",
   "confidence": "high|medium|low"
 }
+
+**CRITICAL: searchQuery should ONLY contain words the user actually said, NO synonyms, NO translations!**
 
 **Understanding Intent Examples:**
 
 "Mandame una foto de mi cedula" → User wants their cedula PHOTO sent back
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula identificacion ID card","confidence":"high"}
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula","confidence":"high"}
+
+"enviame cedula de max mejia" → User wants Max Mejia's cedula
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula max mejia","confidence":"high"}
 
 "enviame la imagen que te habia enviado" → User wants a previous image
 → {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null,"searchQuery":null,"confidence":"medium"}
@@ -285,15 +290,19 @@ Respond with ONLY a JSON object:
 → {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename","searchQuery":null,"confidence":"high"}
 
 "Envíame la factura de marzo" → User wants invoice from March
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura invoice marzo march","confidence":"high"}
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"factura marzo","confidence":"high"}
 
-"Send me my ID" → User wants ID/cedula
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula ID identification card","confidence":"high"}
+"Send me my ID" → User wants ID
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"ID","confidence":"high"}
+
+"Enviaste el texto y no la imagen, enviame la imagen de la cedula de Max Mejia" → Ignore complaint, extract intent
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula Max Mejia","confidence":"high"}
 
 **Rules:**
-- searchQuery should include SYNONYMS in both English & Spanish (cedula = ID = identification = cédula)
+- searchQuery: ONLY words user actually said (cedula → "cedula", NOT "cedula ID identification")
+- Ignore complaint/context words like "enviaste el texto y no la imagen"
+- Extract the actual FILE they want (e.g., "cedula", "pasaporte", "factura")
 - Set confidence based on clarity of request
-- If unsure, set confidence "low"
 
 Respond with ONLY the JSON object:`
             }],
@@ -1120,6 +1129,24 @@ For regular responses, be conversational, helpful, and concise.`;
 
       res.status(200).send('OK');
       return; // Skip the rest of the processing
+    }
+
+    // CRITICAL: Block conversational AI from responding to file queries that already failed
+    // If the message is a file query, the automatic system already tried and failed
+    // Don't let the AI falsely confirm "Enviada!" - return early with error
+    if (!hasMediaAttached && incomingMsg) {
+      const msg = incomingMsg.toLowerCase();
+      const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|enviame|envia|manda|mandame|dame|quiero|necesito|busca|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy|how many|cuánto|list|lista|cedula|cédula|pasaport|id|identificacion|factura|invoice|recibo|receipt/i);
+
+      if (isFileQuery) {
+        // This is a file query but the automatic system didn't handle it (we got here)
+        // This means either: search found nothing, or there was an error
+        // DON'T let conversational AI respond - it will falsely confirm
+        console.log('⚠️ File query reached conversational AI - automatic system failed');
+        await sendWhatsAppMessage(from, `No encontré el archivo que buscas. ¿Podrías ser más específico?\n\nPuedes intentar:\n- "lista de archivos" para ver todos\n- Mencionar el tipo de archivo (cedula, pasaporte, factura, etc.)\n- Mencionar la fecha aproximada`);
+        res.status(200).send('OK');
+        return;
+      }
     }
 
     // Format conversation history for OpenAI

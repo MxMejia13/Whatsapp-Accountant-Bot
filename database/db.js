@@ -327,15 +327,23 @@ async function getAllMediaFiles(phoneNumber, limit = 20) {
  * @returns {Promise<Array>} Array of media files
  */
 async function searchMediaByDescription(phoneNumber, searchTerm, limit = 10) {
+  // Make search flexible: "cedula max mejia" matches "cedula-max-mejia" or "cedula Max Mejia"
+  // Replace spaces with % wildcards so each word is matched separately
+  const flexibleSearchTerm = searchTerm.split(/\s+/).join('%');
+
   const result = await query(
     `SELECT mf.*, m.content as message_content, m.created_at as message_date, m.message_type
      FROM media_files mf
      JOIN messages m ON mf.message_id = m.id
      WHERE m.phone_number = $1
-       AND (mf.file_description ILIKE $2 OR mf.file_name ILIKE $2)
+       AND (
+         mf.file_description ILIKE $2
+         OR mf.file_name ILIKE $2
+         OR REPLACE(mf.file_name, '-', ' ') ILIKE $3
+       )
      ORDER BY m.created_at DESC
-     LIMIT $3`,
-    [phoneNumber, `%${searchTerm}%`, limit]
+     LIMIT $4`,
+    [phoneNumber, `%${flexibleSearchTerm}%`, `%${searchTerm}%`, limit]
   );
   return result.rows;
 }
