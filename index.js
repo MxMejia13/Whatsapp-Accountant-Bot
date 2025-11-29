@@ -494,6 +494,99 @@ Respond with ONLY the JSON object:`
       }
     }
 
+    // Intelligent Image Operation Intent Detection
+    // CRITICAL: This runs BEFORE saving the file so we can use custom names
+    // When user sends an image with text, determine if they want to:
+    // 1. SAVE the image with custom name
+    // 2. GENERATE/EDIT a new image using DALL-E
+    // 3. Just analyze the image
+    if (mediaBuffer && imageData && incomingMsg && incomingMsg.trim()) {
+      try {
+        console.log('🔍 Analyzing image operation intent...');
+        const intentAnalysis = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [{
+            role: 'user',
+            content: `Analyze the user's message accompanying an image they sent. Determine their intent.
+
+User message: "${incomingMsg}"
+
+Respond with ONLY a JSON object:
+
+{
+  "intent": "save|generate|edit|analyze|unclear",
+  "customName": "extracted name or null",
+  "confidence": "high|medium|low",
+  "action": "description of what to do"
+}
+
+**Intent Types:**
+
+1. **save** - User wants to SAVE/ADD the image
+   - Keywords: "add", "save", "agrega", "guarda", "añade", "store", "guardalo", "añadelo"
+   - Examples: "Agrega esta imagen", "Save this", "Add this image as cedula", "guardalo"
+
+2. **generate** - User wants to GENERATE a NEW image using DALL-E
+   - Keywords: "create", "generate", "make", "crea", "genera", "haz"
+   - Examples: "Create an image like this", "Generate a similar image"
+
+3. **edit** - User wants to EDIT/MODIFY the sent image
+   - Keywords: "edit", "modify", "change", "edita", "modifica", "cambia"
+   - Examples: "Edit this image", "Change the background"
+
+4. **analyze** - User just wants analysis/description (default for images)
+   - No specific action keywords
+   - Examples: "What is this?", "Describe this", "¿Qué es esto?"
+
+5. **unclear** - Can't determine intent with confidence
+
+**Custom Name Extraction:**
+- If user says "como [name]" or "as [name]", extract the name
+- Examples: "Agrega esta imagen como cedula Max" → customName: "cedula Max"
+- "Pasaporte Dominicano Max Mejia, guardalo" → customName: "Pasaporte Dominicano Max Mejia"
+
+**Examples:**
+
+"Agrega esta imagen como cedula Max Mejia"
+→ {"intent":"save","customName":"cedula Max Mejia","confidence":"high","action":"save with custom name"}
+
+"Pasaporte Dominicano Max Mejia, guardalo"
+→ {"intent":"save","customName":"Pasaporte Dominicano Max Mejia","confidence":"high","action":"save with custom name"}
+
+"Add this image"
+→ {"intent":"save","customName":null,"confidence":"high","action":"save image"}
+
+"Create an image based on this"
+→ {"intent":"generate","customName":null,"confidence":"high","action":"use DALL-E to generate similar image"}
+
+"Edit this image to remove the background"
+→ {"intent":"edit","customName":null,"confidence":"high","action":"use DALL-E to edit image"}
+
+"What does this show?"
+→ {"intent":"analyze","customName":null,"confidence":"high","action":"analyze and describe image"}
+
+Respond with ONLY the JSON:`
+          }],
+          max_tokens: 150
+        });
+
+        const intentText = intentAnalysis.choices[0].message.content.trim();
+        imageOperationIntent = JSON.parse(intentText.match(/\{[\s\S]*\}/)[0]);
+        console.log('🖼️ Image operation intent:', JSON.stringify(imageOperationIntent));
+
+        // If confidence is low, ask for clarification
+        if (imageOperationIntent.confidence === 'low' || imageOperationIntent.intent === 'unclear') {
+          console.log('⚠️ Unclear image intent - asking for clarification');
+          await sendWhatsAppMessage(from, `No estoy seguro de qué quieres que haga con esta imagen. ¿Quieres que:\n- La guarde?\n- Genere una imagen similar?\n- La edite?\n- Solo la analice?`);
+          res.status(200).send('OK');
+          return;
+        }
+      } catch (intentError) {
+        console.error('Error analyzing image intent:', intentError);
+        // Continue with normal processing if intent detection fails
+      }
+    }
+
     // Save incoming message to database
     let savedMessage = null;
     if (process.env.DATABASE_URL && user) {
@@ -673,93 +766,6 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
       } catch (dbError) {
         console.error('Database error saving message:', dbError);
         // Continue without database if it fails
-      }
-    }
-
-    // Intelligent Image Operation Intent Detection
-    // When user sends an image with text, determine if they want to:
-    // 1. SAVE the image (already done automatically above)
-    // 2. GENERATE/EDIT a new image using DALL-E
-    // 3. Just analyze the image (already done automatically)
-    if (hasMediaAttached && messageType === 'image' && incomingMsg && incomingMsg.trim()) {
-      try {
-        const intentAnalysis = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: [{
-            role: 'user',
-            content: `Analyze the user's message accompanying an image they sent. Determine their intent.
-
-User message: "${incomingMsg}"
-
-Respond with ONLY a JSON object:
-
-{
-  "intent": "save|generate|edit|analyze|unclear",
-  "customName": "extracted name or null",
-  "confidence": "high|medium|low",
-  "action": "description of what to do"
-}
-
-**Intent Types:**
-
-1. **save** - User wants to SAVE/ADD the image
-   - Keywords: "add", "save", "agrega", "guarda", "añade", "store"
-   - Examples: "Agrega esta imagen", "Save this", "Add this image as cedula"
-
-2. **generate** - User wants to GENERATE a NEW image using DALL-E
-   - Keywords: "create", "generate", "make", "crea", "genera", "haz"
-   - Examples: "Create an image like this", "Generate a similar image"
-
-3. **edit** - User wants to EDIT/MODIFY the sent image
-   - Keywords: "edit", "modify", "change", "edita", "modifica", "cambia"
-   - Examples: "Edit this image", "Change the background"
-
-4. **analyze** - User just wants analysis/description (default for images)
-   - No specific action keywords
-   - Examples: "What is this?", "Describe this", "¿Qué es esto?"
-
-5. **unclear** - Can't determine intent with confidence
-
-**Custom Name Extraction:**
-- If user says "como [name]" or "as [name]", extract the name
-- Examples: "Agrega esta imagen como cedula Max" → customName: "cedula Max"
-
-**Examples:**
-
-"Agrega esta imagen como cedula Max Mejia"
-→ {"intent":"save","customName":"cedula Max Mejia","confidence":"high","action":"save with custom name"}
-
-"Add this image"
-→ {"intent":"save","customName":null,"confidence":"high","action":"save image"}
-
-"Create an image based on this"
-→ {"intent":"generate","customName":null,"confidence":"high","action":"use DALL-E to generate similar image"}
-
-"Edit this image to remove the background"
-→ {"intent":"edit","customName":null,"confidence":"high","action":"use DALL-E to edit image"}
-
-"What does this show?"
-→ {"intent":"analyze","customName":null,"confidence":"high","action":"analyze and describe image"}
-
-Respond with ONLY the JSON:`
-          }],
-          max_tokens: 150
-        });
-
-        const intentText = intentAnalysis.choices[0].message.content.trim();
-        imageOperationIntent = JSON.parse(intentText.match(/\{[\s\S]*\}/)[0]);
-        console.log('🖼️ Image operation intent:', JSON.stringify(imageOperationIntent));
-
-        // If confidence is low, ask for clarification
-        if (imageOperationIntent.confidence === 'low' || imageOperationIntent.intent === 'unclear') {
-          console.log('⚠️ Unclear image intent - asking for clarification');
-          await sendWhatsAppMessage(from, `No estoy seguro de qué quieres que haga con esta imagen. ¿Quieres que:\n- La guarde?\n- Genere una imagen similar?\n- La edite?\n- Solo la analice?`);
-          res.status(200).send('OK');
-          return;
-        }
-      } catch (intentError) {
-        console.error('Error analyzing image intent:', intentError);
-        // Continue with normal processing if intent detection fails
       }
     }
 
@@ -988,6 +994,49 @@ Example of good data extraction for WhatsApp:
 Total: 3 rows"
 
 For regular responses, be conversational, helpful, and concise.`;
+
+    // CRITICAL: If intent is "save", skip conversational AI and just confirm
+    // This avoids OpenAI safety filter issues with sensitive documents (passports, IDs, etc.)
+    if (imageOperationIntent && imageOperationIntent.intent === 'save') {
+      console.log('✅ Intent is SAVE - skipping conversational AI call');
+
+      // Generate confirmation message based on custom name
+      let confirmationMsg = '✅ Imagen guardada';
+      if (imageOperationIntent.customName) {
+        confirmationMsg += ` como "${imageOperationIntent.customName}"`;
+      }
+      confirmationMsg += '! La puedo recuperar cuando la necesites.';
+
+      // Add to history
+      history.push({
+        role: 'assistant',
+        content: confirmationMsg
+      });
+
+      // Send confirmation
+      await sendWhatsAppMessage(from, confirmationMsg);
+
+      // Save outgoing message to database
+      if (process.env.DATABASE_URL && user) {
+        try {
+          await saveMessage({
+            userId: user.id,
+            phoneNumber: userPhone,
+            messageSid: null,
+            content: confirmationMsg,
+            direction: 'outgoing',
+            messageType: 'text',
+            isForwarded: false
+          });
+          console.log(`Outgoing message saved to database`);
+        } catch (dbError) {
+          console.error('Database error saving outgoing message:', dbError);
+        }
+      }
+
+      res.status(200).send('OK');
+      return; // Skip the rest of the processing
+    }
 
     // Format conversation history for OpenAI
     const messages = [
