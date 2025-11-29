@@ -165,6 +165,15 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
+    // User identification for context-aware responses
+    const userTitles = {
+      '+18093833443': 'Sr. Mejia',
+      '+18096510177': 'Sr. Max',
+      '+18293803443': 'Sr. Sebastian',
+      '+18098903565': 'Sr. Vinicio Alfredo'
+    };
+    const userTitle = userTitles[userPhone] || '';
+
     // Handle forwarded messages - store and wait for command
     const isForwarded = req.body.Forwarded === 'true';
     if (isForwarded) {
@@ -250,12 +259,18 @@ app.post('/webhook', async (req, res) => {
         if (isFileQuery) {
           console.log('🔍 Potential file query detected:', incomingMsg);
 
-          // Use GPT-4o-mini for fast intent detection
+          // Get user context for smarter search
+          const userContext = userTitles[userPhone] || userPhone;
+          const userName = userContext.replace('Sr. ', '').replace('Sra. ', '').trim();
+
+          // Use GPT-4o-mini for fast intent detection with user context
           const intentCompletion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [{
               role: 'user',
               content: `You are analyzing a user's request for files. Extract the KEY TERMS they mention.
+
+**CRITICAL CONTEXT: This message is from ${userName} (${userPhone})**
 
 User query: "${incomingMsg}"
 
@@ -272,12 +287,20 @@ Respond with ONLY a JSON object:
 
 **CRITICAL: searchQuery should ONLY contain words the user actually said, NO synonyms, NO translations!**
 
+**USE CONTEXT - If user says "mi cedula" or "my ID", understand they mean THEIR OWN document:**
+- User "Max" asks "mi cedula" → search for "cedula Max" (user's name + document type)
+- User "Max" asks "enviame la imagen de la cedula" → search for "cedula Max" (implied: their own)
+- User "Max" asks "enviame la cedula Max Mejia" → search for "cedula Max Mejia" (explicit)
+
 **Understanding Intent Examples:**
 
-"Mandame una foto de mi cedula" → User wants their cedula PHOTO sent back
-→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula","confidence":"high"}
+"Mandame una foto de mi cedula" from Max → User wants THEIR OWN cedula
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula Max","confidence":"high"}
 
-"enviame cedula de max mejia" → User wants Max Mejia's cedula
+"Enviame la imagen de la cedula" from Max → User wants THEIR OWN cedula (implied)
+→ {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula Max","confidence":"high"}
+
+"enviame cedula de max mejia" → User wants Max Mejia's cedula (explicit)
 → {"action":"retrieve","fileType":"image","timeframe":"all","infoType":null,"searchQuery":"cedula max mejia","confidence":"high"}
 
 "enviame la imagen que te habia enviado" → User wants a previous image
@@ -300,9 +323,11 @@ Respond with ONLY a JSON object:
 
 **Rules:**
 - searchQuery: ONLY words user actually said (cedula → "cedula", NOT "cedula ID identification")
+- **USE USER CONTEXT:** If they say "mi/my [document]", add user's name to searchQuery
 - Ignore complaint/context words like "enviaste el texto y no la imagen"
 - Extract the actual FILE they want (e.g., "cedula", "pasaporte", "factura")
 - Set confidence based on clarity of request
+- If user asks for "la cedula" without specifying whose, assume they mean THEIR OWN (add their name)
 
 Respond with ONLY the JSON object:`
             }],
@@ -887,15 +912,6 @@ Now create a filename for the audio above (2-4 words, lowercase, hyphens, no oth
     // For image operations, we'll use intelligent AI-based intent detection
     // This will be handled after file processing, using context-aware analysis
     // (imageOperationIntent already declared at top with other media variables)
-
-    // Detect user identity for custom greetings
-    const userTitles = {
-      '+18093833443': 'Sr. Mejia',
-      '+18096510177': 'Sr. Max',
-      '+18293803443': 'Sr. Sebastian',
-      '+18098903565': 'Sr. Vinicio Alfredo'
-    };
-    const userTitle = userTitles[userPhone] || '';
 
     // Check if user has a forwarded message waiting
     const forwardedMsg = forwardedMessages.get(from);
