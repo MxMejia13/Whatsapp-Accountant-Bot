@@ -171,63 +171,151 @@ app.post('/webhook', async (req, res) => {
     // Handle file retrieval commands
     if (process.env.DATABASE_URL && user && incomingMsg) {
       const msg = incomingMsg.toLowerCase();
-      let fileRetrieved = false;
 
       try {
-        // Check for file retrieval commands
-        if (msg.match(/send|enviar|dame|give me|get|buscar|find/i) &&
-            msg.match(/image|imagen|photo|foto|picture|audio|video|document|documento|file|archivo/i)) {
+        // Use AI to detect if this is a file-related query
+        const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy/i);
 
-          let fileType = null;
-          let searchResults = [];
+        if (isFileQuery) {
+          // Use GPT-4o to interpret the user's intent
+          const intentCompletion = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            messages: [{
+              role: 'user',
+              content: `Analyze this user query about files and respond with ONLY a JSON object (no other text):
 
-          // Determine file type
-          if (msg.match(/image|imagen|photo|foto|picture/i)) {
-            fileType = 'image';
-          } else if (msg.match(/audio/i)) {
-            fileType = 'audio';
-          } else if (msg.match(/video/i)) {
-            fileType = 'video';
-          } else if (msg.match(/document|documento|pdf/i)) {
-            fileType = 'document';
+User query: "${incomingMsg}"
+
+Determine:
+1. action: "retrieve" (send file back), "info" (tell me about file), "list" (show what files I have), or "none" (not a file query)
+2. fileType: "image", "audio", "video", "document", or null (any type)
+3. timeframe: "latest" (most recent), "today", "yesterday", "all", or null
+4. infoType: if action is "info", what info do they want? "filename", "count", "date", "all"
+
+Examples:
+"Send me the latest audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"What's the name of the last image I sent?" -> {"action":"info","fileType":"image","timeframe":"latest","infoType":"filename"}
+"How many photos do I have?" -> {"action":"info","fileType":"image","timeframe":"all","infoType":"count"}
+"Dame el audio de ayer" -> {"action":"retrieve","fileType":"audio","timeframe":"yesterday","infoType":null}
+"List all my documents" -> {"action":"list","fileType":"document","timeframe":"all","infoType":null}
+"What files did I send today?" -> {"action":"list","fileType":null,"timeframe":"today","infoType":null}
+
+Respond with ONLY the JSON object, nothing else.`
+            }],
+            max_tokens: 100
+          });
+
+          let intent;
+          try {
+            const intentText = intentCompletion.choices[0].message.content.trim();
+            intent = JSON.parse(intentText.match(/\{[\s\S]*\}/)[0]);
+          } catch (parseError) {
+            console.error('Failed to parse intent:', parseError);
+            // Continue to normal processing if intent parsing fails
+            throw new Error('Intent parsing failed');
           }
 
-          // Check for time-based queries
-          if (msg.match(/latest|last|recent|más reciente|último|última/i)) {
-            // Get the most recent file of that type
+          console.log('Detected intent:', intent);
+
+          // If not a file query, continue to normal processing
+          if (intent.action === 'none') {
+            throw new Error('Not a file query');
+          }
+
+          let searchResults = [];
+          const fileType = intent.fileType;
+
+          // Execute appropriate query based on timeframe
+          if (intent.timeframe === 'latest') {
             if (fileType) {
               const latestFile = await getLatestMediaFile(userPhone, fileType);
               if (latestFile) {
                 searchResults = [latestFile];
               }
+            } else {
+              searchResults = await getAllMediaFiles(userPhone, 1);
             }
-          } else if (msg.match(/yesterday|ayer/i)) {
-            // Get files from yesterday
+          } else if (intent.timeframe === 'yesterday') {
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
             yesterday.setHours(0, 0, 0, 0);
             const endOfYesterday = new Date(yesterday);
             endOfYesterday.setHours(23, 59, 59, 999);
             searchResults = await getMediaByDateRange(userPhone, yesterday, endOfYesterday);
-          } else if (msg.match(/today|hoy/i)) {
-            // Get files from today
+            if (fileType) {
+              searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
+            }
+          } else if (intent.timeframe === 'today') {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             searchResults = await getMediaByDateRange(userPhone, today, new Date());
-          } else if (msg.match(/all|todos|todas/i)) {
-            // Get all files of that type
+            if (fileType) {
+              searchResults = searchResults.filter(f => f.file_type.startsWith(fileType));
+            }
+          } else if (intent.timeframe === 'all') {
             searchResults = fileType
               ? await searchMediaFiles(userPhone, fileType, 20)
               : await getAllMediaFiles(userPhone, 20);
-          } else {
-            // Default: get recent files
-            searchResults = fileType
-              ? await searchMediaFiles(userPhone, fileType, 5)
-              : await getAllMediaFiles(userPhone, 5);
           }
 
-          // Send the files
-          if (searchResults.length > 0) {
+          // Handle different actions
+          if (intent.action === 'info') {
+            // Provide information about files
+            if (searchResults.length === 0) {
+              await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
+              res.status(200).send('OK');
+              return;
+            }
+
+            if (intent.infoType === 'filename') {
+              const file = searchResults[0];
+              const messageDate = new Date(file.message_date).toLocaleDateString();
+              await sendWhatsAppMessage(from, `📎 The file is named: "${file.file_name}"\n📅 Date: ${messageDate}`);
+            } else if (intent.infoType === 'count') {
+              await sendWhatsAppMessage(from, `📊 You have ${searchResults.length} ${fileType || 'media'} file(s) saved.`);
+            } else if (intent.infoType === 'date') {
+              const file = searchResults[0];
+              const messageDate = new Date(file.message_date).toLocaleString();
+              await sendWhatsAppMessage(from, `📅 The file was sent on: ${messageDate}`);
+            } else {
+              // Provide all info
+              const file = searchResults[0];
+              const messageDate = new Date(file.message_date).toLocaleString();
+              await sendWhatsAppMessage(from, `📎 File: "${file.file_name}"\n📅 Date: ${messageDate}\n📦 Size: ${(file.file_size / 1024).toFixed(2)} KB\n📁 Type: ${file.file_type}`);
+            }
+            res.status(200).send('OK');
+            return;
+
+          } else if (intent.action === 'list') {
+            // List files
+            if (searchResults.length === 0) {
+              await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
+              res.status(200).send('OK');
+              return;
+            }
+
+            let listMessage = `📁 Found ${searchResults.length} file(s):\n\n`;
+            searchResults.slice(0, 10).forEach((file, index) => {
+              const date = new Date(file.message_date).toLocaleDateString();
+              listMessage += `${index + 1}. ${file.file_name} (${date})\n`;
+            });
+
+            if (searchResults.length > 10) {
+              listMessage += `\n... and ${searchResults.length - 10} more files.`;
+            }
+
+            await sendWhatsAppMessage(from, listMessage);
+            res.status(200).send('OK');
+            return;
+
+          } else if (intent.action === 'retrieve') {
+            // Send the files back
+            if (searchResults.length === 0) {
+              await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
+              res.status(200).send('OK');
+              return;
+            }
+
             const fs = require('fs');
             const path = require('path');
 
@@ -257,7 +345,7 @@ app.post('/webhook', async (req, res) => {
                   await twilioClient.messages.create({
                     from: process.env.TWILIO_WHATSAPP_NUMBER,
                     to: from,
-                    body: `📎 ${file.file_name || 'File'} (${messageDate})`,
+                    body: `📎 ${file.file_name} (${messageDate})`,
                     mediaUrl: [fileUrl]
                   });
 
@@ -271,18 +359,12 @@ app.post('/webhook', async (req, res) => {
               }
             }
 
-            fileRetrieved = true;
-            res.status(200).send('OK');
-            return;
-          } else {
-            await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
-            fileRetrieved = true;
             res.status(200).send('OK');
             return;
           }
         }
       } catch (queryError) {
-        console.error('Error retrieving files:', queryError);
+        console.error('Error in file query system:', queryError);
         // Continue to normal processing if file retrieval fails
       }
     }
