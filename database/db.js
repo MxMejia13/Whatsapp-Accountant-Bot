@@ -327,23 +327,39 @@ async function getAllMediaFiles(phoneNumber, limit = 20) {
  * @returns {Promise<Array>} Array of media files
  */
 async function searchMediaByDescription(phoneNumber, searchTerm, limit = 10) {
-  // Make search flexible: "cedula max mejia" matches "cedula-max-mejia" or "cedula Max Mejia"
-  // Replace spaces with % wildcards so each word is matched separately
-  const flexibleSearchTerm = searchTerm.split(/\s+/).join('%');
+  // Split search terms and use OR logic - match ANY term, not ALL terms
+  // "pasaporte passport" → search for files containing "pasaporte" OR "passport"
+  const searchTerms = searchTerm.split(/\s+/).filter(term => term.length > 0);
+
+  // Build dynamic OR conditions for each search term
+  const orConditions = [];
+  const params = [phoneNumber];
+  let paramIndex = 2;
+
+  searchTerms.forEach(term => {
+    // For each term, check description, filename, and filename with spaces
+    orConditions.push(`(
+      mf.file_description ILIKE $${paramIndex}
+      OR mf.file_name ILIKE $${paramIndex}
+      OR REPLACE(mf.file_name, '-', ' ') ILIKE $${paramIndex}
+    )`);
+    params.push(`%${term}%`);
+    paramIndex++;
+  });
+
+  const whereClause = orConditions.length > 0
+    ? `AND (${orConditions.join(' OR ')})`
+    : '';
 
   const result = await query(
     `SELECT mf.*, m.content as message_content, m.created_at as message_date, m.message_type
      FROM media_files mf
      JOIN messages m ON mf.message_id = m.id
      WHERE m.phone_number = $1
-       AND (
-         mf.file_description ILIKE $2
-         OR mf.file_name ILIKE $2
-         OR REPLACE(mf.file_name, '-', ' ') ILIKE $3
-       )
+       ${whereClause}
      ORDER BY m.created_at DESC
-     LIMIT $4`,
-    [phoneNumber, `%${flexibleSearchTerm}%`, `%${searchTerm}%`, limit]
+     LIMIT $${paramIndex}`,
+    [...params, limit]
   );
   return result.rows;
 }
