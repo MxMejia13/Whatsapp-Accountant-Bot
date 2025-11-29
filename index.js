@@ -1147,24 +1147,6 @@ For regular responses, be conversational, helpful, and concise.`;
       return; // Skip the rest of the processing
     }
 
-    // CRITICAL: Block conversational AI from responding to file queries that already failed
-    // If the message is a file query, the automatic system already tried and failed
-    // Don't let the AI falsely confirm "Enviada!" - return early with error
-    if (!hasMediaAttached && incomingMsg) {
-      const msg = incomingMsg.toLowerCase();
-      const isFileQuery = msg.match(/file|archivo|image|imagen|photo|foto|audio|video|document|documento|pdf|picture|sent|envié|enviame|envia|manda|mandame|dame|quiero|necesito|busca|guardado|saved|name|nombre|último|latest|ayer|yesterday|today|hoy|how many|cuánto|list|lista|cedula|cédula|pasaport|id|identificacion|factura|invoice|recibo|receipt/i);
-
-      if (isFileQuery) {
-        // This is a file query but the automatic system didn't handle it (we got here)
-        // This means either: search found nothing, or there was an error
-        // DON'T let conversational AI respond - it will falsely confirm
-        console.log('⚠️ File query reached conversational AI - automatic system failed');
-        await sendWhatsAppMessage(from, `No encontré el archivo que buscas. ¿Podrías ser más específico?\n\nPuedes intentar:\n- "lista de archivos" para ver todos\n- Mencionar el tipo de archivo (cedula, pasaporte, factura, etc.)\n- Mencionar la fecha aproximada`);
-        res.status(200).send('OK');
-        return;
-      }
-    }
-
     // Format conversation history for OpenAI
     const messages = [
       { role: 'system', content: systemPrompt },
