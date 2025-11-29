@@ -432,6 +432,7 @@ Respond with ONLY the JSON object:`
     // Handle media (images and audio)
     let mediaUrl = null;
     let mediaType = null;
+    let messageType = 'text'; // Default to text, will be updated if media is present
     let transcribedText = null;
     let imageData = null;
 
@@ -492,8 +493,7 @@ Respond with ONLY the JSON object:`
     let savedMessage = null;
     if (process.env.DATABASE_URL && user) {
       try {
-        // Determine message type
-        let messageType = 'text';
+        // Determine message type (already declared above, just update it)
         if (mediaType) {
           if (mediaType.startsWith('image/')) messageType = 'image';
           else if (mediaType.startsWith('audio/')) messageType = 'audio';
