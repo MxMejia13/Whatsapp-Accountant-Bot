@@ -196,6 +196,9 @@ Determine:
 
 Examples:
 "Send me the latest audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"Dame el audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"Send me the audio back" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"Envíame la imagen" -> {"action":"retrieve","fileType":"image","timeframe":"latest","infoType":null}
 "What's the name of the last image I sent?" -> {"action":"info","fileType":"image","timeframe":"latest","infoType":"filename"}
 "How many photos do I have?" -> {"action":"info","fileType":"image","timeframe":"all","infoType":"count"}
 "Dame el audio de ayer" -> {"action":"retrieve","fileType":"audio","timeframe":"yesterday","infoType":null}
@@ -203,6 +206,8 @@ Examples:
 "What files did I send today?" -> {"action":"list","fileType":null,"timeframe":"today","infoType":null}
 "What's the name of the last audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
 "Como se llama el audio?" -> {"action":"info","fileType":"audio","timeframe":"latest","infoType":"filename"}
+"I want the audio" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
+"Give me that audio file" -> {"action":"retrieve","fileType":"audio","timeframe":"latest","infoType":null}
 
 Respond with ONLY the JSON object, nothing else.`
             }],
@@ -322,7 +327,10 @@ Respond with ONLY the JSON object, nothing else.`
 
           } else if (intent.action === 'retrieve') {
             // Send the files back
+            console.log(`📤 Retrieving files to send back. Found ${searchResults.length} files`);
+
             if (searchResults.length === 0) {
+              console.log(`⚠️  No ${fileType || 'media'} files found for retrieval`);
               await sendWhatsAppMessage(from, `❌ No ${fileType || 'media'} files found matching your request.`);
               res.status(200).send('OK');
               return;
@@ -331,7 +339,7 @@ Respond with ONLY the JSON object, nothing else.`
             const fs = require('fs');
             const path = require('path');
 
-            await sendWhatsAppMessage(from, `📁 Found ${searchResults.length} file(s):`);
+            await sendWhatsAppMessage(from, `📁 Found ${searchResults.length} file(s). Sending now...`);
 
             for (const file of searchResults.slice(0, 5)) { // Limit to 5 files
               try {
@@ -503,6 +511,7 @@ Respond with ONLY the JSON object, nothing else.`
                 .substring(0, 50);
             } else if (messageType === 'audio' && transcribedText) {
               // Use transcription to generate descriptive name
+              console.log(`🎙️ Generating intelligent name for audio. Transcription: "${transcribedText.substring(0, 100)}..."`);
               const summaryCompletion = await openai.chat.completions.create({
                 model: 'gpt-4o',
                 messages: [{
@@ -516,6 +525,7 @@ Respond with ONLY the JSON object, nothing else.`
                 .replace(/[^a-z0-9-]/g, '-')
                 .replace(/-+/g, '-')
                 .substring(0, 50);
+              console.log(`✅ Generated audio filename: ${descriptiveName}`);
             } else if (messageType === 'document') {
               descriptiveName = 'document';
             }
@@ -611,22 +621,26 @@ User: "What's the name of the last audio?"
 You: "The audio file is named 'meeting-discussion_2024-11-29_10-30-15.ogg' - it was saved on 11/29/2024 at 10:30."
 
 When users send you media (image, audio, document), you should:
-1. Acknowledge receipt and confirm it's been saved with an intelligent name
-2. Tell them they can retrieve it later with commands like:
-   - "Send me the latest image"
-   - "Dame el audio de hoy"
-   - "Give me all photos from yesterday"
-   - "What's the name of my last audio?"
+1. Acknowledge receipt and confirm it's been saved with an intelligent AI-generated name
+2. Tell them they can retrieve it or ask for its name later
 
 Example responses:
 User: [sends audio]
-You: "✅ Audio received and saved as 'meeting-notes_2024-11-29_10-30-15.ogg'! I've transcribed it: [transcription]. You can retrieve this audio anytime by asking 'send me the latest audio' or 'what's the name of my last audio?'"
+You: "✅ Audio received and saved with an intelligent name based on the content! I've transcribed it: [transcription]. You can retrieve this audio by asking 'send me the latest audio' or ask 'what's the name of my last audio?'"
 
 User: [sends image]
-You: "✅ Image saved as 'invoice-receipt_2024-11-29_14-20-05.jpg'! This image shows [description]. You can retrieve it later by asking 'send me today's images' or get the filename with 'what's the name of the last image?'"
+You: "✅ Image saved with an intelligent name based on what it shows! This image shows [description]. You can retrieve it by asking 'send me the latest image' or ask 'what's the name of the last image?'"
+
+User: [sends document]
+You: "✅ Document saved! You can retrieve it by asking 'send me the latest document' or 'what's the name of the last document?'"
+
+IMPORTANT: When users ask to retrieve files, they want the ACTUAL FILE sent back to them, not just the filename.
+- "Send me the audio" → Send the audio file via WhatsApp
+- "Dame la imagen" → Send the image file via WhatsApp
+- "What's the name?" → Just tell them the filename
 
 User: "What's the name of the last audio file I sent?"
-You: Use the file query system to look it up and respond with the actual filename.
+You: The file query system will provide the actual filename.
 
 NEVER say you cannot access filenames or that files don't have specific names - ALL files have intelligent AI-generated names that you can query.
 
