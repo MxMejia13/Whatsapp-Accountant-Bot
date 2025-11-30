@@ -810,11 +810,18 @@ Respond with ONLY the JSON:`
 
     // Ask user how to save media if they didn't provide save instruction
     if (mediaBuffer && mediaUrl && mediaType) {
+      // IMPORTANT: Distinguish between voice messages (for talking) and audio files (for saving)
+      const isVoiceMessage = mediaType.includes('ogg') || mediaType.includes('opus');
+
       const shouldAskForSaveInstruction =
-        // No text message (media only)
-        (!incomingMsg || !incomingMsg.trim()) ||
-        // OR text exists but intent is not "save"
-        (imageOperationIntent && imageOperationIntent.intent !== 'save');
+        // Don't ask for voice messages - they're for communication, not saving
+        !isVoiceMessage &&
+        (
+          // No text message (media only)
+          (!incomingMsg || !incomingMsg.trim()) ||
+          // OR text exists but intent is not "save"
+          (imageOperationIntent && imageOperationIntent.intent !== 'save')
+        );
 
       if (shouldAskForSaveInstruction) {
         console.log(`❓ Asking user how to save media`);
