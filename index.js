@@ -74,9 +74,9 @@ const pendingDeletions = new Map();
 // Store pending file retrievals when multiple matches found
 const pendingFileRetrievals = new Map();
 
-// Store recently received media (for when save instruction comes in separate message)
-// Structure: { phoneNumber: { mediaBuffer, mediaType, mediaUrl, timestamp } }
-const recentMedia = new Map();
+// Store media awaiting save confirmation from user
+// Structure: { phoneNumber: { mediaBuffer, mediaType, mediaUrl, messageText, timestamp } }
+const pendingMediaSaves = new Map();
 
 // Helper function: Split long messages into chunks
 function splitMessage(message, maxLength = 1500) {
@@ -194,44 +194,36 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Handle "save that media" - when user sends media first, then save instruction in separate message
-    if (numMedia === 0 && incomingMsg && /guarda\s+(ese|esa|esto)\s+(audio|imagen|video|archivo|foto)/i.test(incomingMsg)) {
-      console.log('🔍 Detected "save that media" request without media in current message');
+    // Handle pending media save confirmation
+    if (pendingMediaSaves.has(from) && incomingMsg) {
+      const pendingMedia = pendingMediaSaves.get(from);
+      const userResponse = incomingMsg.trim().toLowerCase();
 
-      // Check if there's recent media from this user
-      if (recentMedia.has(from)) {
-        const recent = recentMedia.get(from);
-        const timeSinceReceived = Date.now() - recent.timestamp;
+      console.log(`📋 User responding to pending media save: "${incomingMsg}"`);
 
-        // Only use recent media if it was received within last 5 minutes
-        if (timeSinceReceived < 5 * 60 * 1000) {
-          console.log(`✅ Found recent media from ${from} (${timeSinceReceived}ms ago)`);
-          console.log(`   Media type: ${recent.mediaType}`);
-
-          // Inject the recent media into current request as if it came together
-          req.body.NumMedia = '1';
-          req.body.MediaUrl0 = recent.mediaUrl;
-          req.body.MediaContentType0 = recent.mediaType;
-
-          // Update the numMedia variable that was read at the start
-          numMedia = 1;
-
-          // Clear from recent media (it's being processed now)
-          recentMedia.delete(from);
-
-          console.log('📎 Proceeding to process media with save instruction');
-        } else {
-          console.log(`⏰ Recent media too old (${Math.round(timeSinceReceived/1000)}s ago)`);
-          await sendWhatsAppMessage(from, '⏰ El archivo que enviaste ya expiró. Por favor envíalo de nuevo con la instrucción de guardado.');
-          res.status(200).send('OK');
-          return;
-        }
-      } else {
-        console.log('❌ No recent media found for this user');
-        await sendWhatsAppMessage(from, '🤔 No encontré un archivo reciente para guardar. Envía el archivo primero, luego dime cómo guardarlo.');
+      // Check if user wants to discard
+      if (userResponse === 'no' || userResponse === 'no guardar' || userResponse === 'descartar') {
+        pendingMediaSaves.delete(from);
+        await sendWhatsAppMessage(from, '🗑️ Archivo descartado.');
         res.status(200).send('OK');
         return;
       }
+
+      // Otherwise, treat response as the custom name for saving
+      console.log(`✅ User wants to save with custom name: "${incomingMsg}"`);
+
+      // Inject the pending media into current request
+      req.body.NumMedia = '1';
+      req.body.MediaUrl0 = pendingMedia.mediaUrl;
+      req.body.MediaContentType0 = pendingMedia.mediaType;
+      req.body.Body = `${pendingMedia.messageText || ''} ${incomingMsg}`.trim(); // Combine original message with new name
+      numMedia = 1;
+
+      // Clear from pending
+      pendingMediaSaves.delete(from);
+
+      console.log('📎 Proceeding to save media with user-provided name');
+      // Continue processing below with the injected media
     }
 
     // Handle pending file retrieval confirmations
@@ -816,34 +808,51 @@ Respond with ONLY the JSON:`
       }
     }
 
-    // Store media in recentMedia if user didn't explicitly ask to save it
-    // This allows them to send media first, then say "guarda ese audio" in next message
+    // Ask user how to save media if they didn't provide save instruction
     if (mediaBuffer && mediaUrl && mediaType) {
-      const shouldStoreForLater =
+      const shouldAskForSaveInstruction =
         // No text message (media only)
         (!incomingMsg || !incomingMsg.trim()) ||
         // OR text exists but intent is not "save"
         (imageOperationIntent && imageOperationIntent.intent !== 'save');
 
-      if (shouldStoreForLater) {
-        console.log(`📦 Storing media in recentMedia for potential save instruction later`);
+      if (shouldAskForSaveInstruction) {
+        console.log(`❓ Asking user how to save media`);
         console.log(`   Media type: ${mediaType}`);
+
+        // Store media in pending saves
         const timestamp = Date.now();
-        recentMedia.set(from, {
+        pendingMediaSaves.set(from, {
           mediaUrl,
           mediaType,
+          messageText: incomingMsg || '',
           timestamp
         });
+
+        // Determine media type for message
+        let mediaTypeName = 'archivo';
+        if (mediaType.startsWith('audio/')) mediaTypeName = 'audio';
+        else if (mediaType.startsWith('image/')) mediaTypeName = 'imagen';
+        else if (mediaType.startsWith('video/')) mediaTypeName = 'video';
+        else if (mediaType.includes('document') || mediaType.includes('pdf')) mediaTypeName = 'documento';
+
+        // Ask user how they want to save it
+        const promptMessage = `📎 ¿Guardar este ${mediaTypeName}?\n\nResponde:\n• Cómo guardarlo (ej: "como Cumpleaños Feliz")\n• O "no" para descartar`;
+        await sendWhatsAppMessage(from, promptMessage);
+
         // Set expiry - clear after 5 minutes
         setTimeout(() => {
-          if (recentMedia.has(from)) {
-            const stored = recentMedia.get(from);
+          if (pendingMediaSaves.has(from)) {
+            const stored = pendingMediaSaves.get(from);
             if (stored.timestamp === timestamp) {
-              recentMedia.delete(from);
-              console.log(`🗑️ Expired recent media for ${from}`);
+              pendingMediaSaves.delete(from);
+              console.log(`🗑️ Expired pending media save for ${from}`);
             }
           }
         }, 5 * 60 * 1000);
+
+        res.status(200).send('OK');
+        return; // Stop processing - wait for user's response
       }
     }
 
