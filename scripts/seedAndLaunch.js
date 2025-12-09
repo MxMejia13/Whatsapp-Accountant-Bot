@@ -31,8 +31,7 @@ const USERS = [
     phone: '+18098903565',
     alias: 'Sr. Vinicio',
     name: 'Vinicio Alfredo Mejia Gonzalez',
-    email: 'viniciomejia5@gmail.com',
-    isAdmin: true
+    email: 'viniciomejia5@gmail.com'
   },
   {
     phone: '+18293803443',
@@ -101,7 +100,6 @@ async function upsertUser(userData) {
       alias: userData.alias,
       fullName: userData.name,
       email: userData.email || '',
-      isAdmin: userData.isAdmin || false,
       // Legacy compatibility
       title: userData.alias,
       name: userData.name
