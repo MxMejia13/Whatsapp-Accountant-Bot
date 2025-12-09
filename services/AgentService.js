@@ -877,31 +877,24 @@ async function executeTool(toolName, args, context) {
           // If not a valid email format, treat as user alias and lookup
           if (!isValidEmail) {
             console.log(`🔍 "${recipientInput}" is not a valid email format - treating as user alias`);
-            console.log(`   Searching for user in database...`);
+            console.log(`   Performing unified database search (alias, fullName, name)...`);
 
-            // Try multiple lookup strategies
-            let user = null;
+            // ===============================================
+            // UNIFIED CASE-INSENSITIVE SEARCH (Single Query)
+            // ===============================================
+            // Search all three fields simultaneously using $or
+            // This is more robust and efficient than sequential queries
+            const searchPattern = new RegExp(`^${recipientInput.trim()}$`, 'i');
 
-            // Strategy 1: Try alias field (case-insensitive)
-            user = await User.findOne({
-              alias: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
+            const user = await User.findOne({
+              $or: [
+                { alias: { $regex: searchPattern } },
+                { fullName: { $regex: searchPattern } },
+                { name: { $regex: searchPattern } }
+              ]
             });
 
-            // Strategy 2: If not found, try fullName field
-            if (!user) {
-              console.log(`   Alias not found, trying fullName field...`);
-              user = await User.findOne({
-                fullName: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
-              });
-            }
-
-            // Strategy 3: If still not found, try legacy name field
-            if (!user) {
-              console.log(`   fullName not found, trying name field...`);
-              user = await User.findOne({
-                name: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
-              });
-            }
+            console.log(`   Query executed: $or[alias, fullName, name] with case-insensitive regex`);
 
             // Check if user was found and has email
             if (user) {
