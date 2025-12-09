@@ -204,14 +204,15 @@ app.post('/webhook', async (req, res) => {
                 // Retrieve conversation history
                 const history = await getConversationHistory(from, 10);
 
-                // Process transcribed text through AgentService
+                // Process transcribed text through AgentService with voice context
                 const agentResponse = await processAgentMessage({
                   userMessage: result.transcribedText,
                   conversationHistory: history,
                   phoneNumber: from,
                   hasMediaAttached: true,
                   mediaType: 'audio/voice',
-                  mediaAnalysis: null
+                  mediaAnalysis: null,
+                  isVoice: true  // CRITICAL: Inform Agent this came from voice transcription
                 });
 
                 if (agentResponse.success) {

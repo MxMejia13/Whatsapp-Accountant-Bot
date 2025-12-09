@@ -28,7 +28,7 @@ const openai = new OpenAI({
 /**
  * Build the system prompt with user context
  */
-function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
+function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false) {
   // User context with alias, full name, and email
   let userContext = '';
   if (user) {
@@ -49,7 +49,11 @@ function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnal
     ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}
+  const voiceContext = isVoice
+    ? `\n\n🎤 VOICE INPUT: The user's message was transcribed from an audio note using Whisper AI. You successfully received and understood their voice message. Respond naturally and conversationally, acknowledging the spoken nature of their request. If they ask whether you can "read", "hear", "understand", or "process" audio/voice notes, confirm that YES, you can transcribe and understand voice messages perfectly.`
+    : '';
+
+  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}${voiceContext}
 
 ## CORE CAPABILITIES:
 - **PRIMARY FOCUS:** Document management, file storage, and accounting support
@@ -884,7 +888,8 @@ async function processMessage(options) {
     phoneNumber,
     hasMediaAttached,
     mediaType,
-    mediaAnalysis
+    mediaAnalysis,
+    isVoice = false
   } = options;
 
   // CRITICAL: Retrieve user context from MongoDB BEFORE generating prompt
@@ -934,7 +939,8 @@ async function processMessage(options) {
     isAdmin,
     hasMediaAttached,
     mediaType,
-    mediaAnalysis
+    mediaAnalysis,
+    isVoice
   );
 
   // Build messages array for OpenAI
