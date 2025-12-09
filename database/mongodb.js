@@ -220,10 +220,15 @@ async function saveMediaFile(data) {
   await mediaFile.save();
 
   // Update user's file count
-  await User.findOneAndUpdate(
-    { phoneNumber: data.userId },
-    { $inc: { totalFiles: 1 } }
-  );
+  // Note: ownerPhoneNumber is the correct field name (matches MediaFile schema)
+  const phoneNumber = data.ownerPhoneNumber || data.userId;
+
+  if (phoneNumber) {
+    await User.findOneAndUpdate(
+      { phoneNumber: phoneNumber },
+      { $inc: { totalFiles: 1 } }
+    );
+  }
 
   return mediaFile;
 }

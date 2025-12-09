@@ -696,9 +696,9 @@ async function saveAudioFile(data) {
 
     console.log(`   [2/2] Saving to MongoDB...`);
     const mediaFile = await saveMediaFile({
-      userId,
-      userTitle,
-      s3Url: uploadResult.url,       // ← REQUIRED from R2
+      ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
+      ownerTitle: userTitle,
+      url: uploadResult.url,          // ← REQUIRED from R2 (schema expects 'url', not 's3Url')
       s3Key: uploadResult.key,        // ← REQUIRED from R2
       filename: filenameSuggestion,   // ← REQUIRED
       description: `Audio: ${transcribedText.substring(0, 200)}`,
@@ -781,9 +781,9 @@ async function saveImageFile(data) {
 
     console.log(`   [2/2] Saving to MongoDB...`);
     const mediaFile = await saveMediaFile({
-      userId,
-      userTitle,
-      s3Url: uploadResult.url,       // ← REQUIRED from R2
+      ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
+      ownerTitle: userTitle,
+      url: uploadResult.url,          // ← REQUIRED from R2 (schema expects 'url', not 's3Url')
       s3Key: uploadResult.key,        // ← REQUIRED from R2
       filename: analysis.filename,    // ← REQUIRED
       description: analysis.description || '',
