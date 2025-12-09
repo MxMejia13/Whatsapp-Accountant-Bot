@@ -220,6 +220,16 @@ You are a knowledgeable assistant capable of answering questions on ANY topic:
 - **Answer ALL questions** - not just document/accounting related
 - Use \`get_current_time\` for any time-sensitive information
 
+### 📧 EMAIL COMPOSITION (send_email tool):
+When sending emails on behalf of the user:
+- **Subject:** Always compose a clear, descriptive, professional subject line
+- **Body:** Write a complete, well-formatted message that sounds professional and helpful
+- **Attachments:** The system automatically resolves filenames and generates secure download links
+- **Recipients:** You can use user aliases (e.g., "Vinicio") - the system will look up their email automatically
+- **Example:** If user says "Send my receipt to Vinicio", compose a complete professional email like:
+  - Subject: "Recibo de compra - [Date]"
+  - Body: "Hola Vinicio,\n\nTe envío el recibo solicitado. Puedes descargarlo usando el enlace seguro incluido abajo.\n\nSaludos!"
+
 ## 🚫 CANCELLATION DETECTION:
 When user says "No", "Cancelar", "Detener", "Stop", "Cancel", or similar:
 - **Immediately abort** the current operation
@@ -795,10 +805,10 @@ async function executeTool(toolName, args, context) {
       }
 
       case 'send_email': {
-        // Send email with optional file attachment
-        const { recipientEmail, subject, body, s3Key } = args;
+        // Smart email dispatch with user alias lookup and filename resolution
+        const { recipientEmail: recipientInput, subject, body, filename_or_key, s3Key } = args;
 
-        if (!recipientEmail || !subject || !body) {
+        if (!recipientInput || !subject || !body) {
           return {
             success: false,
             error: 'recipientEmail, subject, and body are required'
@@ -809,55 +819,180 @@ async function executeTool(toolName, args, context) {
           const nodemailer = require('nodemailer');
           const { getSignedUrl } = require('./CloudStorage');
 
-          // Configure SMTP transporter
-          const transporter = nodemailer.createTransport({
+          // ===============================================
+          // SMART USER LOOKUP: Resolve alias to email
+          // ===============================================
+          let resolvedEmail = recipientInput;
+          let resolvedAlias = null;
+
+          // Check if recipientInput looks like an email (contains @)
+          if (!recipientInput.includes('@')) {
+            // Treat as user alias - lookup in database
+            console.log(`🔍 Recipient "${recipientInput}" appears to be a user alias, looking up email...`);
+
+            const userByAlias = await User.findOne({
+              alias: { $regex: new RegExp(`^${recipientInput}$`, 'i') }
+            });
+
+            if (userByAlias && userByAlias.email) {
+              resolvedEmail = userByAlias.email;
+              resolvedAlias = userByAlias.alias;
+              console.log(`✅ Resolved alias "${recipientInput}" → ${resolvedEmail}`);
+            } else {
+              return {
+                success: false,
+                error: `User alias "${recipientInput}" not found or has no email configured. Please use a valid email address or ensure the user has an email set.`
+              };
+            }
+          }
+
+          // ===============================================
+          // SMART FILE LOOKUP: Resolve filename to s3Key
+          // ===============================================
+          let resolvedS3Key = filename_or_key || s3Key;
+          let resolvedFilename = null;
+
+          if (resolvedS3Key) {
+            // Check if it looks like a filename (no slashes) vs s3Key (has slashes like "media/...")
+            if (!resolvedS3Key.includes('/')) {
+              // Treat as filename - lookup in MongoDB
+              console.log(`🔍 Attachment "${resolvedS3Key}" appears to be a filename, looking up s3Key...`);
+
+              const file = await MediaFile.findOne({
+                filename: resolvedS3Key
+              });
+
+              if (file && file.s3Key) {
+                resolvedFilename = file.filename;
+                resolvedS3Key = file.s3Key;
+                console.log(`✅ Resolved filename "${resolvedFilename}" → ${resolvedS3Key}`);
+              } else {
+                console.warn(`⚠️  File "${resolvedS3Key}" not found in database, treating as s3Key`);
+                // Continue anyway - maybe it's a valid s3Key without slashes
+              }
+            } else {
+              console.log(`📎 Using provided s3Key: ${resolvedS3Key}`);
+            }
+          }
+
+          // ===============================================
+          // SMTP CONFIGURATION (Fixed for ETIMEDOUT)
+          // ===============================================
+          const smtpPort = parseInt(process.env.SMTP_PORT) || 587;
+          const isSecurePort = smtpPort === 465;
+
+          const transportConfig = {
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: parseInt(process.env.SMTP_PORT) || 587,
-            secure: false, // Use TLS
+            port: smtpPort,
+            secure: isSecurePort, // true for 465, false for other ports
             auth: {
               user: process.env.SMTP_USER || process.env.SMTP_EMAIL,
               pass: process.env.SMTP_PASS
-            }
-          });
+            },
+            // Enhanced connection settings to fix ETIMEDOUT
+            connectionTimeout: 10000, // 10 seconds
+            greetingTimeout: 10000,
+            socketTimeout: 10000
+          };
 
-          // Prepare email options
+          // Add TLS configuration for port 587
+          if (!isSecurePort) {
+            transportConfig.tls = {
+              ciphers: 'SSLv3',
+              rejectUnauthorized: false // For development; set true in production
+            };
+            transportConfig.requireTLS = true;
+          }
+
+          console.log(`📧 Configuring SMTP: ${transportConfig.host}:${transportConfig.port} (secure: ${transportConfig.secure})`);
+
+          const transporter = nodemailer.createTransport(transportConfig);
+
+          // ===============================================
+          // COMPOSE EMAIL WITH ATTACHMENT LINK
+          // ===============================================
           const mailOptions = {
             from: process.env.SMTP_FROM || process.env.SMTP_EMAIL,
-            to: recipientEmail,
+            to: resolvedEmail,
             subject: subject,
             text: body,
             html: body.replace(/\n/g, '<br>')
           };
 
-          // If s3Key provided, generate pre-signed URL and add to email
-          if (s3Key) {
+          // If file attachment provided, generate secure download URL
+          if (resolvedS3Key) {
             try {
-              const downloadUrl = await getSignedUrl(s3Key, 604800); // 7 days expiration
-              mailOptions.text += `\n\n📎 Archivo adjunto:\n${downloadUrl}`;
-              mailOptions.html += `<br><br>📎 <a href="${downloadUrl}">Descargar archivo adjunto</a>`;
-              console.log(`📧 Added attachment download link (7-day expiration)`);
+              const downloadUrl = await getSignedUrl(resolvedS3Key, 604800); // 7 days expiration
+              const attachmentName = resolvedFilename || 'archivo';
+
+              // Add prominent download link to email body
+              mailOptions.text += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📎 ARCHIVO ADJUNTO: ${attachmentName}\n🔗 Descargar (válido por 7 días):\n${downloadUrl}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+              mailOptions.html += `
+                <br><br>
+                <div style="border: 2px solid #4CAF50; padding: 15px; border-radius: 8px; background-color: #f9f9f9; margin-top: 20px;">
+                  <p style="margin: 0; font-size: 16px;"><strong>📎 Archivo Adjunto:</strong> ${attachmentName}</p>
+                  <p style="margin: 10px 0 0 0;">
+                    <a href="${downloadUrl}"
+                       style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                      🔗 Descargar Archivo
+                    </a>
+                  </p>
+                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #666;">
+                    <em>Este enlace es válido por 7 días</em>
+                  </p>
+                </div>
+              `;
+
+              console.log(`📧 Added secure download link for: ${attachmentName} (7-day expiration)`);
             } catch (urlError) {
               console.error(`⚠️  Failed to generate download URL:`, urlError.message);
-              // Continue without attachment
+              return {
+                success: false,
+                error: `Failed to generate download link for attachment: ${urlError.message}`
+              };
             }
           }
 
-          // Send email
+          // ===============================================
+          // SEND EMAIL
+          // ===============================================
+          console.log(`📤 Sending email to ${resolvedEmail}...`);
           const info = await transporter.sendMail(mailOptions);
-          console.log(`✅ Email sent successfully to ${recipientEmail}`);
+
+          console.log(`✅ Email sent successfully!`);
+          console.log(`   To: ${resolvedEmail}${resolvedAlias ? ` (${resolvedAlias})` : ''}`);
+          console.log(`   Subject: ${subject}`);
           console.log(`   Message ID: ${info.messageId}`);
+          console.log(`   Attachment: ${resolvedS3Key ? 'Yes' : 'No'}`);
 
           return {
             success: true,
-            message: `Email sent successfully to ${recipientEmail}`,
+            message: `Email sent successfully to ${resolvedEmail}${resolvedAlias ? ` (${resolvedAlias})` : ''}`,
             messageId: info.messageId,
-            attachmentIncluded: !!s3Key
+            recipient: resolvedEmail,
+            recipientAlias: resolvedAlias,
+            attachmentIncluded: !!resolvedS3Key,
+            attachmentFilename: resolvedFilename
           };
         } catch (error) {
-          console.error('Error sending email:', error);
+          console.error('❌ Error sending email:', error);
+          console.error('   Error code:', error.code);
+          console.error('   Error message:', error.message);
+
+          // Provide helpful error messages
+          let errorMessage = error.message;
+          if (error.code === 'ETIMEDOUT') {
+            errorMessage = 'SMTP connection timeout. Please check your SMTP_HOST, SMTP_PORT, and network connectivity. Ensure firewall allows outbound connections on the SMTP port.';
+          } else if (error.code === 'EAUTH') {
+            errorMessage = 'SMTP authentication failed. Please verify SMTP_USER and SMTP_PASS are correct.';
+          } else if (error.code === 'ECONNREFUSED') {
+            errorMessage = 'SMTP connection refused. Please verify SMTP_HOST and SMTP_PORT are correct.';
+          }
+
           return {
             success: false,
-            error: `Error sending email: ${error.message}`
+            error: `Error sending email: ${errorMessage}`
           };
         }
       }

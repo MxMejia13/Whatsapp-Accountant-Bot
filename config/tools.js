@@ -204,25 +204,25 @@ const tools = [
     type: 'function',
     function: {
       name: 'send_email',
-      description: 'Send email with optional file attachment. If s3Key is provided, generates a secure 7-day pre-signed download URL for R2 files and includes it in the email. Use this when user asks to email a document or send information via email.',
+      description: 'Smart email dispatch with user alias lookup and file attachment. IMPORTANT: Automatically resolves user aliases to email addresses (e.g., "Vinicio" → looks up email in database). Supports file attachments by filename or R2 key. Use this when user asks to email a document or send information via email.',
       parameters: {
         type: 'object',
         properties: {
           recipientEmail: {
             type: 'string',
-            description: 'Recipient email address (e.g., "user@example.com")'
+            description: 'Recipient: Can be an email address (e.g., "user@example.com") OR a user alias (e.g., "Vinicio", "Max"). If alias is provided, system will automatically look up the user\'s email from the database.'
           },
           subject: {
             type: 'string',
-            description: 'Email subject line'
+            description: 'Email subject line - be descriptive and professional'
           },
           body: {
             type: 'string',
-            description: 'Email body text (supports newlines for formatting)'
+            description: 'Email body text (supports newlines for formatting). Be clear and helpful.'
           },
-          s3Key: {
+          filename_or_key: {
             type: 'string',
-            description: 'Optional: R2 storage key for file attachment (e.g., "media/18091234567/1733766789123-abc123.pdf"). If provided, a secure download link will be generated and included in the email.'
+            description: 'Optional: File to attach. Can be a filename (e.g., "receipt-walmart-2024-12-09") OR an R2 key (e.g., "media/18091234567/1733766789123-abc123.pdf"). System will automatically find the file and generate a secure 7-day download link.'
           }
         },
         required: ['recipientEmail', 'subject', 'body']
