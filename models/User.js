@@ -13,8 +13,7 @@ const UserSchema = new Schema({
   phoneNumber: {
     type: String,
     required: true,
-    unique: true,
-    index: true,
+    unique: true, // unique: true automatically creates an index
     trim: true,
     // E.164 format validation (optional but recommended)
     validate: {
@@ -28,7 +27,6 @@ const UserSchema = new Schema({
   alias: {
     type: String,
     trim: true,
-    // Example: "Sr. Max", "Sr. Vinicio"
     index: true
   },
 
@@ -107,11 +105,8 @@ const UserSchema = new Schema({
 });
 
 // Indexes for performance
-UserSchema.index({ phoneNumber: 1 });
-UserSchema.index({ email: 1 }, { sparse: true });
-UserSchema.index({ alias: 1 });
-UserSchema.index({ isAdmin: 1 });
-UserSchema.index({ createdAt: -1 });
+// Note: phoneNumber, email, alias, createdAt already have index: true in schema
+// No need to define them again here to avoid "Duplicate index" warnings
 
 // Instance methods
 UserSchema.methods.updateLastActive = function() {
