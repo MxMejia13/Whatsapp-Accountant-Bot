@@ -10,6 +10,7 @@ const OpenAI = require('openai');
 const { tools } = require('../config/tools');
 const {
   MediaFile,
+  User,
   saveMediaFile,
   searchMediaFiles,
   getRecentMedia,
@@ -26,10 +27,18 @@ const openai = new OpenAI({
 /**
  * Build the system prompt with user context
  */
-function buildSystemPrompt(userTitle, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
-  const titleContext = userTitle
-    ? `\n\nYou are speaking with ${userTitle}. Always address them respectfully using this title.`
-    : '';
+function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
+  // User context with alias, full name, and email
+  let userContext = '';
+  if (user) {
+    const alias = user.alias || user.title || 'Estimado Usuario/a';
+    const fullName = user.fullName || user.name || '';
+    const email = user.email || 'Not Set';
+
+    userContext = `\n\n👤 USER CONTEXT: You are speaking with ${alias}${fullName ? ` (${fullName})` : ''}. Address the user respectfully using their alias. ${email !== 'Not Set' ? `Their email is ${email}.` : ''} Never ask the user for their name.`;
+  } else {
+    userContext = '\n\n👤 USER CONTEXT: You are speaking with Estimado Usuario/a. Address the user respectfully.';
+  }
 
   const adminContext = isAdmin
     ? `\n\n🔐 ADMIN PRIVILEGES: You have admin access. You can search ALL files in the system. Files you don't own will show as LOCKED with metadata only. Use \`request_file_access\` to request permission from the owner.`
@@ -39,7 +48,7 @@ function buildSystemPrompt(userTitle, isAdmin, hasMediaAttached, mediaType, medi
     ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Accountant Assistant. You help users store, search, and retrieve their personal documents with AI-powered intelligence.${titleContext}${adminContext}${mediaContext}
+  return `You are a Privacy-First Intelligent WhatsApp Accountant Assistant. You help users store, search, and retrieve their personal documents with AI-powered intelligence.${userContext}${adminContext}${mediaContext}
 
 ## LANGUAGE POLICY:
 - **Default: SPANISH** - Always respond in Spanish unless user explicitly uses English
@@ -130,12 +139,12 @@ When user wants to find a file:
 User: [sends image of Dominican ID]
 System: [Auto-analyzed: "Dominican ID card, keywords: cedula id identificacion..."]
 You: Call \`save_file\` (no custom_name)
-Response: "✅ Cédula guardada, ${userTitle}! Generé palabras clave inteligentes para búsqueda rápida."
+Response: "✅ Cédula guardada, ${user.alias}! Generé palabras clave inteligentes para búsqueda rápida."
 
 **Example 2: Smart Search**
 User: "Enviame mi cedula"
 You: Call \`search_files\` with query "cedula id identificacion documento personal dominicana"
-Response: [If found] "📎 Aquí está tu cédula, ${userTitle}!"
+Response: [If found] "📎 Aquí está tu cédula, ${user.alias}!"
 
 **Example 3: Admin Locked File**
 User (admin): "Busca el pasaporte de Jose"
@@ -165,7 +174,7 @@ Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo pa
  * Execute a tool call - Privacy-Aware Edition
  */
 async function executeTool(toolName, args, context) {
-  const { phoneNumber, userTitle, isAdmin, mediaAnalysis } = context;
+  const { phoneNumber, user, isAdmin, mediaAnalysis } = context;
 
   console.log(`🔧 Executing tool: ${toolName} with args:`, JSON.stringify(args, null, 2));
 
@@ -187,7 +196,7 @@ async function executeTool(toolName, args, context) {
         // Save to MongoDB with full metadata
         const savedFile = await saveMediaFile({
           ownerPhoneNumber: phoneNumber,
-          ownerTitle: userTitle,
+          ownerTitle: user?.alias || user?.title || phoneNumber,
           url: mediaAnalysis.url, // S3/R2 URL
           s3Key: mediaAnalysis.s3Key,
           filename: filename,
@@ -280,7 +289,7 @@ async function executeTool(toolName, args, context) {
         const result = await requestFileAccess(
           file_id,
           phoneNumber,
-          userTitle
+          user?.alias || user?.title || phoneNumber
         );
 
         return result;
@@ -358,16 +367,56 @@ async function processMessage(options) {
   const {
     userMessage,
     conversationHistory,
-    userTitle,
     phoneNumber,
-    isAdmin,
     hasMediaAttached,
     mediaType,
     mediaAnalysis
   } = options;
 
+  // CRITICAL: Retrieve user context from MongoDB BEFORE generating prompt
+  console.log(`🔍 Looking up user profile for ${phoneNumber}...`);
+
+  let user = null;
+  let isAdmin = false;
+
+  try {
+    // Extract clean phone number (remove whatsapp: prefix if present)
+    const cleanPhone = phoneNumber.replace('whatsapp:', '');
+
+    // Look up user in MongoDB
+    user = await User.findOne({ phoneNumber: cleanPhone });
+
+    if (user) {
+      console.log(`✅ User found: ${user.alias || user.title || user.fullName || 'Unknown'}`);
+      console.log(`   Full Name: ${user.fullName || 'N/A'}`);
+      console.log(`   Email: ${user.email || 'Not Set'}`);
+      console.log(`   Admin: ${user.isAdmin || false}`);
+
+      isAdmin = user.isAdmin || false;
+    } else {
+      console.log(`⚠️  User not found in database. Using fallback alias.`);
+      // Create a minimal user object for fallback
+      user = {
+        phoneNumber: cleanPhone,
+        alias: 'Estimado Usuario/a',
+        fullName: null,
+        email: null
+      };
+    }
+  } catch (error) {
+    console.error(`❌ Error looking up user:`, error);
+    // Use fallback on error
+    user = {
+      phoneNumber: phoneNumber.replace('whatsapp:', ''),
+      alias: 'Estimado Usuario/a',
+      fullName: null,
+      email: null
+    };
+  }
+
+  // Build system prompt with user context
   const systemPrompt = buildSystemPrompt(
-    userTitle,
+    user,
     isAdmin,
     hasMediaAttached,
     mediaType,
@@ -391,7 +440,7 @@ async function processMessage(options) {
     content: userMessage || '(user sent media without text message)'
   });
 
-  console.log(`🤖 Agent processing message from ${phoneNumber}`);
+  console.log(`🤖 Agent processing message from ${user.alias || phoneNumber}`);
   console.log(`   Admin: ${isAdmin}, Media: ${hasMediaAttached}, Type: ${mediaType}`);
   console.log(`   Message: "${userMessage?.substring(0, 100)}..."`);
 
@@ -430,8 +479,8 @@ async function processMessage(options) {
 
         // Execute the tool
         const toolResult = await executeTool(toolName, toolArgs, {
-          phoneNumber,
-          userTitle,
+          phoneNumber: phoneNumber.replace('whatsapp:', ''),
+          user,
           isAdmin,
           mediaAnalysis
         });
