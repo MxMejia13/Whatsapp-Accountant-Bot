@@ -163,8 +163,8 @@ app.post('/webhook', async (req, res) => {
         const mimeType = req.body[`MediaContentType${i}`];
 
         try {
-          // Process media with AI
-          const processedMedia = await processMedia({
+          // Process media with AI (includes R2 upload and MongoDB save)
+          const result = await processMedia({
             mediaUrl,
             mimeType,
             ownerPhoneNumber: phoneNumber,
@@ -173,36 +173,50 @@ app.post('/webhook', async (req, res) => {
             isForwarded: false
           });
 
-          // Save to MongoDB
-          await saveMediaFile({
-            ownerPhoneNumber: phoneNumber,
-            ownerTitle: user.title || user.name,
-            url: processedMedia.url,
-            s3Key: processedMedia.s3Key,
-            filename: processedMedia.filename,
-            description: processedMedia.description,
-            keywords: processedMedia.keywords,
-            detectedText: processedMedia.detectedText,
-            documentType: processedMedia.documentType,
-            confidence: processedMedia.confidence,
-            originalName: processedMedia.originalName,
-            mimeType: processedMedia.mimeType,
-            fileSize: processedMedia.fileSize,
-            isForwarded: false,
-            twilioMediaUrl: mediaUrl
-          });
+          // Handle result based on action
+          if (result.action === 'SAVED') {
+            // File was successfully saved by processMedia
+            console.log(`✅ Media processed and saved: ${result.savedFile.filename}`);
 
-          console.log(`✅ Saved media: ${processedMedia.filename}`);
+            // Send confirmation to user
+            await twilioClient.messages.create({
+              from: process.env.TWILIO_WHATSAPP_NUMBER,
+              to: from,
+              body: result.message
+            });
 
-          // Send confirmation to user
-          await twilioClient.messages.create({
-            from: process.env.TWILIO_WHATSAPP_NUMBER,
-            to: from,
-            body: `✅ Guardado: "${processedMedia.filename}"\n\n📝 ${processedMedia.description}`
-          });
+          } else if (result.action === 'ASK') {
+            // Low confidence - ask user for confirmation
+            console.log(`❓ Low confidence - asking user`);
+
+            await twilioClient.messages.create({
+              from: process.env.TWILIO_WHATSAPP_NUMBER,
+              to: from,
+              body: result.message
+            });
+
+          } else if (result.action === 'CHAT') {
+            // Voice message treated as chat (not saved)
+            console.log(`💬 Voice message treated as chat`);
+
+            // Pass to AgentService for processing
+            // (This would be handled in the text message section below)
+
+          } else if (result.action === 'ERROR') {
+            // Error occurred during processing
+            console.error(`❌ Error processing media: ${result.error}`);
+
+            await twilioClient.messages.create({
+              from: process.env.TWILIO_WHATSAPP_NUMBER,
+              to: from,
+              body: result.message
+            });
+          }
 
         } catch (error) {
           console.error(`❌ Error processing media ${i}:`, error);
+          console.error(`   Stack:`, error.stack);
+
           await twilioClient.messages.create({
             from: process.env.TWILIO_WHATSAPP_NUMBER,
             to: from,
