@@ -26,11 +26,7 @@ async function initScheduler(mongoUri, twilio) {
   agenda = new Agenda({
     db: {
       address: mongoUri,
-      collection: 'scheduled_jobs',
-      options: {
-        useNewUrlParser: true,
-        useUnifiedTopology: true
-      }
+      collection: 'scheduled_jobs'
     },
     processEvery: '30 seconds', // Check for jobs every 30 seconds
     maxConcurrency: 5,

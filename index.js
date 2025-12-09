@@ -6,6 +6,7 @@ const OpenAI = require('openai');
 const { connectMongoDB, getOrCreateUser, saveMediaFile, User } = require('./database/mongodb');
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
 const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
+const { initScheduler } = require('./services/SchedulerService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -422,7 +423,16 @@ async function startServer() {
     // 2. Run system diagnostics
     await runDiagnostics();
 
-    // 3. Start Express server
+    // 3. Initialize Scheduler (Agenda + MongoDB)
+    console.log('⏰ Initializing reminder scheduler...');
+    try {
+      await initScheduler(process.env.MONGODB_URI, twilioClient);
+    } catch (error) {
+      console.warn('⚠️  Scheduler initialization failed:', error.message);
+      console.warn('   Reminders will not work, but other features will continue.');
+    }
+
+    // 4. Start Express server
     app.listen(PORT, () => {
       console.log('═══════════════════════════════════════════════════════════');
       console.log(`✅ Server is running on port ${PORT}`);

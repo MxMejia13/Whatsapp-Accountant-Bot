@@ -108,6 +108,35 @@ const tools = [
         }
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_reminder',
+      description: 'Schedule a future WhatsApp reminder. Parses natural language time expressions (e.g., "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM"). Can send to the user or to other people.',
+      parameters: {
+        type: 'object',
+        properties: {
+          when: {
+            type: 'string',
+            description: 'Natural language time expression in Spanish or English. Examples: "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM", "tomorrow at 9 AM"'
+          },
+          description: {
+            type: 'string',
+            description: 'The reminder message to send'
+          },
+          recipients: {
+            type: 'array',
+            items: {
+              type: 'string'
+            },
+            description: 'Who should receive the reminder. Can be: "yo"/"me" for the user, or names like "Max", "Vinicio", etc. Default: ["yo"]',
+            default: ['yo']
+          }
+        },
+        required: ['when', 'description']
+      }
+    }
   }
 ];
 

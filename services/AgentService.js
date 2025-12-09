@@ -19,6 +19,7 @@ const {
   verifyFileAccess
 } = require('../database/mongodb');
 const { requestFileAccess } = require('./PermissionService');
+const { scheduleReminder } = require('./SchedulerService');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -133,6 +134,12 @@ When user wants to find a file:
    - Use when: User asks what files they have
    - Parameters: limit, document_type
 
+6. **\`schedule_reminder\`** - Schedule WhatsApp reminders
+   - Use when: User wants to schedule a future message/reminder
+   - Parameters: when (natural language), description, recipients (optional)
+   - Examples: "Recuérdame mañana a las 9 AM llamar al contador", "Program un reminder en 2 horas"
+   - Supports Spanish and English time expressions
+
 ## EXAMPLES:
 
 **Example 1: Smart Save**
@@ -205,6 +212,117 @@ Cuando el usuario pregunte "¿Cuáles son tus nuevas funciones?", "¿Qué hay de
    - Notificaciones automáticas por WhatsApp
 
 **Nota:** Todas estas características están diseñadas con **privacidad primero**. Tus documentos son tuyos y solo tuyos.`;
+}
+
+/**
+ * Parse natural language time expressions to Date objects
+ * Supports Spanish and English
+ */
+function parseNaturalTime(expression) {
+  const now = new Date();
+  const expr = expression.toLowerCase().trim();
+
+  // Relative time expressions
+  if (expr.match(/en (\d+) (minuto|minutos)/)) {
+    const minutes = parseInt(expr.match(/\d+/)[0]);
+    return new Date(now.getTime() + minutes * 60 * 1000);
+  }
+
+  if (expr.match(/en (\d+) (hora|horas)/)) {
+    const hours = parseInt(expr.match(/\d+/)[0]);
+    return new Date(now.getTime() + hours * 60 * 60 * 1000);
+  }
+
+  if (expr.match(/en (\d+) (día|días|dia|dias)/)) {
+    const days = parseInt(expr.match(/\d+/)[0]);
+    const date = new Date(now);
+    date.setDate(date.getDate() + days);
+    return date;
+  }
+
+  // Tomorrow/Mañana
+  if (expr.match(/ma[ñn]ana/i) || expr.match(/tomorrow/i)) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Check if time is specified
+    const timeMatch = expr.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1]);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const meridiem = timeMatch[3];
+
+      if (meridiem && meridiem.toLowerCase() === 'pm' && hours < 12) {
+        hours += 12;
+      } else if (meridiem && meridiem.toLowerCase() === 'am' && hours === 12) {
+        hours = 0;
+      }
+
+      tomorrow.setHours(hours, minutes, 0, 0);
+    } else {
+      tomorrow.setHours(9, 0, 0, 0); // Default 9 AM
+    }
+
+    return tomorrow;
+  }
+
+  // Specific days of the week
+  const daysOfWeek = {
+    'lunes': 1, 'monday': 1,
+    'martes': 2, 'tuesday': 2,
+    'miércoles': 3, 'miercoles': 3, 'wednesday': 3,
+    'jueves': 4, 'thursday': 4,
+    'viernes': 5, 'friday': 5,
+    'sábado': 6, 'sabado': 6, 'saturday': 6,
+    'domingo': 0, 'sunday': 0
+  };
+
+  for (const [dayName, dayNum] of Object.entries(daysOfWeek)) {
+    if (expr.includes(dayName)) {
+      const targetDate = new Date(now);
+      const currentDay = targetDate.getDay();
+      let daysUntilTarget = dayNum - currentDay;
+
+      if (daysUntilTarget <= 0) {
+        daysUntilTarget += 7; // Next week
+      }
+
+      targetDate.setDate(targetDate.getDate() + daysUntilTarget);
+
+      // Check if time is specified
+      const timeMatch = expr.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+      if (timeMatch) {
+        let hours = parseInt(timeMatch[1]);
+        const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+        const meridiem = timeMatch[3];
+
+        if (meridiem && meridiem.toLowerCase() === 'pm' && hours < 12) {
+          hours += 12;
+        } else if (meridiem && meridiem.toLowerCase() === 'am' && hours === 12) {
+          hours = 0;
+        }
+
+        targetDate.setHours(hours, minutes, 0, 0);
+      } else {
+        targetDate.setHours(9, 0, 0, 0); // Default 9 AM
+      }
+
+      return targetDate;
+    }
+  }
+
+  // Try to parse as ISO date or standard date format
+  try {
+    const parsedDate = new Date(expression);
+    if (!isNaN(parsedDate.getTime())) {
+      return parsedDate;
+    }
+  } catch (e) {
+    // Fall through
+  }
+
+  // Default: 1 hour from now
+  return new Date(now.getTime() + 60 * 60 * 1000);
 }
 
 /**
@@ -379,6 +497,66 @@ async function executeTool(toolName, args, context) {
           })),
           count: files.length
         };
+      }
+
+      case 'schedule_reminder': {
+        const { when, description, recipients } = args;
+
+        // Parse natural language time
+        const executionTime = parseNaturalTime(when);
+
+        // Default recipients to current user
+        const recipientList = recipients && recipients.length > 0
+          ? recipients
+          : ['yo'];
+
+        console.log(`📅 Scheduling reminder for: ${executionTime.toISOString()}`);
+        console.log(`   Description: ${description}`);
+        console.log(`   Recipients: ${recipientList.join(', ')}`);
+
+        try {
+          const result = await scheduleReminder(
+            executionTime,
+            recipientList,
+            description,
+            phoneNumber.replace('whatsapp:', '')
+          );
+
+          if (!result.success) {
+            return {
+              success: false,
+              error: result.error || 'Failed to schedule reminder'
+            };
+          }
+
+          // Format confirmation message
+          const timeString = executionTime.toLocaleString('es-ES', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+
+          return {
+            success: true,
+            message: `Reminder scheduled successfully`,
+            scheduled_for: result.scheduledFor,
+            scheduled_for_readable: timeString,
+            recipient_count: result.recipientCount,
+            recipients: result.recipients,
+            job_id: result.jobId,
+            description: description
+          };
+
+        } catch (error) {
+          console.error('Error scheduling reminder:', error);
+          return {
+            success: false,
+            error: `Failed to schedule: ${error.message}`
+          };
+        }
       }
 
       default:
