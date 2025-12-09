@@ -7,6 +7,7 @@
  */
 
 const OpenAI = require('openai');
+const User = require('../models/User');
 const { tools } = require('../config/tools');
 const {
   MediaFile,
@@ -18,6 +19,7 @@ const {
   verifyFileAccess
 } = require('../database/mongodb');
 const { requestFileAccess } = require('./PermissionService');
+const { scheduleReminder } = require('./SchedulerService');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -26,10 +28,18 @@ const openai = new OpenAI({
 /**
  * Build the system prompt with user context
  */
-function buildSystemPrompt(userTitle, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
-  const titleContext = userTitle
-    ? `\n\nYou are speaking with ${userTitle}. Always address them respectfully using this title.`
-    : '';
+function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
+  // User context with alias, full name, and email
+  let userContext = '';
+  if (user) {
+    const alias = user.alias || user.title || 'Estimado Usuario/a';
+    const fullName = user.fullName || user.name || '';
+    const email = user.email || 'Not Set';
+
+    userContext = `\n\n👤 USER CONTEXT: You are speaking with ${alias}${fullName ? ` (${fullName})` : ''}. Address the user respectfully using their alias. ${email !== 'Not Set' ? `Their email is ${email}.` : ''} Never ask the user for their name.`;
+  } else {
+    userContext = '\n\n👤 USER CONTEXT: You are speaking with Estimado Usuario/a. Address the user respectfully.';
+  }
 
   const adminContext = isAdmin
     ? `\n\n🔐 ADMIN PRIVILEGES: You have admin access. You can search ALL files in the system. Files you don't own will show as LOCKED with metadata only. Use \`request_file_access\` to request permission from the owner.`
@@ -39,7 +49,12 @@ function buildSystemPrompt(userTitle, isAdmin, hasMediaAttached, mediaType, medi
     ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Accountant Assistant. You help users store, search, and retrieve their personal documents with AI-powered intelligence.${titleContext}${adminContext}${mediaContext}
+  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}
+
+## CORE CAPABILITIES:
+- **PRIMARY FOCUS:** Document management, file storage, and accounting support
+- **GENERAL KNOWLEDGE:** You can answer general questions about any topic using your built-in knowledge
+- **DYNAMIC INFORMATION:** You have access to real-time information via tools (current time, scheduling, etc.)
 
 ## LANGUAGE POLICY:
 - **Default: SPANISH** - Always respond in Spanish unless user explicitly uses English
@@ -124,18 +139,44 @@ When user wants to find a file:
    - Use when: User asks what files they have
    - Parameters: limit, document_type
 
+6. **\`schedule_reminder\`** - Schedule WhatsApp reminders (one-time or recurring)
+   - Use when: User wants to schedule a future message/reminder
+   - Parameters: when, description, recipients (optional), frequency (optional)
+   - **CRITICAL UX RULES:**
+     * **Single-Turn Execution:** Gather ALL info (task, time, frequency) from user's initial message
+     * **No Unnecessary Confirmations:** Don't ask "¿Podrías confirmarme...?" unless info is truly missing
+     * **Infer Frequency Intelligently:**
+       - "cumpleaños", "aniversario", "todos los años" → frequency: "yearly"
+       - "cada mes", "mensualmente" → frequency: "monthly"
+       - "cada semana", "semanalmente" → frequency: "weekly"
+       - "todos los días", "diariamente" → frequency: "daily"
+       - Default → frequency: "once"
+     * **Cancellation Detection:** If user says "No", "Cancelar", "Detener", abort immediately and say: "Entendido, tarea cancelada."
+   - Examples:
+     * "Recuérdame mañana a las 9 AM llamar al contador" → Call immediately with inferred params
+     * "El 10 de diciembre es el cumpleaños de Max, recuérdamelo" → frequency: "yearly"
+
+7. **\`get_current_time\`** - Get current date and time
+   - Use when: User asks "what time is it", "what day is today", "what's the date"
+   - Also use when: You need current time for calculations (age, time until event, days since, etc.)
+   - Returns: Current date and time in ISO 8601 format
+   - Examples:
+     * "¿Qué hora es?" → Call \`get_current_time\`, respond with formatted time
+     * "¿Cuántos días faltan para Navidad?" → Call \`get_current_time\`, calculate difference
+     * "¿Cuántos años tiene alguien nacido en 1990?" → Call \`get_current_time\`, calculate age
+
 ## EXAMPLES:
 
 **Example 1: Smart Save**
 User: [sends image of Dominican ID]
 System: [Auto-analyzed: "Dominican ID card, keywords: cedula id identificacion..."]
 You: Call \`save_file\` (no custom_name)
-Response: "✅ Cédula guardada, ${userTitle}! Generé palabras clave inteligentes para búsqueda rápida."
+Response: "✅ Cédula guardada, ${user.alias}! Generé palabras clave inteligentes para búsqueda rápida."
 
 **Example 2: Smart Search**
 User: "Enviame mi cedula"
 You: Call \`search_files\` with query "cedula id identificacion documento personal dominicana"
-Response: [If found] "📎 Aquí está tu cédula, ${userTitle}!"
+Response: [If found] "📎 Aquí está tu cédula, ${user.alias}!"
 
 **Example 3: Admin Locked File**
 User (admin): "Busca el pasaporte de Jose"
@@ -152,20 +193,190 @@ System: [Auto-analyzed OCR: "Total: $45.50"]
 You: NO TOOL CALL - just read analysis
 Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo para referencia futura?"
 
+## GENERAL KNOWLEDGE & INFORMATION:
+
+You are a knowledgeable assistant capable of answering questions on ANY topic:
+- **History, Science, Math, Geography:** Use your built-in knowledge to provide accurate answers
+- **Current Events:** Explain you have knowledge up to January 2025 and may not know very recent events
+- **Time-Sensitive Questions:** ALWAYS call \`get_current_time\` when needed for:
+  * "What time is it?", "What day is today?", "What's the date?"
+  * Age calculations, countdowns, days since/until events
+  * Any question requiring current date/time
+- **Be Helpful:** Don't limit yourself to only document/accounting questions
+- **Be Honest:** If you don't know something, say so. Don't make up information.
+- **Stay Relevant:** For lengthy explanations, keep answers concise and to the point
+
 ## REMEMBER:
 - Be proactive and intelligent
 - ALWAYS expand search queries with synonyms
 - Respect privacy boundaries
 - Explain permission workflow clearly to admins
 - Be conversational and helpful
-- Default language: SPANISH`;
+- Default language: SPANISH
+- **Answer ALL questions** - not just document/accounting related
+- Use \`get_current_time\` for any time-sensitive information
+
+## 🚫 CANCELLATION DETECTION:
+When user says "No", "Cancelar", "Detener", "Stop", "Cancel", or similar:
+- **Immediately abort** the current operation
+- **Do NOT call any tools**
+- Respond simply: "Entendido, tarea cancelada." or "Understood, task cancelled."
+- Return to idle state
+
+## 🎉 NUEVAS CARACTERÍSTICAS V3.0
+
+Cuando el usuario pregunte "¿Cuáles son tus nuevas funciones?", "¿Qué hay de nuevo?", "¿Qué características tienes?" o similar, responde con esta lista:
+
+**Versión 3.0 - Características Principales:**
+
+1. **🔒 Privacidad "Peer-to-Peer"**
+   - Control de acceso estricto por usuario
+   - Solo puedes ver tus propios archivos (o los que te compartan)
+   - Los administradores necesitan tu autorización para ver tus documentos privados
+   - Sistema de "Permission Handshake" (te llegará un WhatsApp pidiendo permiso)
+
+2. **🧠 Búsqueda con Lenguaje Natural**
+   - Puedes buscar usando frases completas y naturales
+   - Ejemplos: "Búscame la factura de Bravo del mes pasado", "¿Dónde está mi cédula?"
+   - Expansión automática de sinónimos (busca "cedula" y encuentra "identificación", "ID", etc.)
+   - Búsqueda inteligente en texto OCR extraído de imágenes
+
+3. **📧 Bóveda de Correo Electrónico**
+   - Reenvía facturas y adjuntos a: **bot@mejiafamily.app**
+   - Los archivos se guardan automáticamente en tu bóveda personal
+   - Recibirás confirmación por WhatsApp cuando se procesen
+   - Funciona con PDFs, imágenes, documentos, etc.
+
+4. **📊 Reportes y Resúmenes "On-Demand"**
+   - Generación de resúmenes contables cuando los solicites
+   - Reportes PDF descargables
+   - Análisis de gastos por categoría
+   - Estadísticas de tus archivos guardados
+
+5. **⏰ Agenda Inteligente**
+   - Programación de recordatorios
+   - Gestión de fechas importantes
+   - Notificaciones automáticas por WhatsApp
+
+**Nota:** Todas estas características están diseñadas con **privacidad primero**. Tus documentos son tuyos y solo tuyos.`;
+}
+
+/**
+ * Parse natural language time expressions to Date objects
+ * Supports Spanish and English
+ */
+function parseNaturalTime(expression) {
+  const now = new Date();
+  const expr = expression.toLowerCase().trim();
+
+  // Relative time expressions
+  if (expr.match(/en (\d+) (minuto|minutos)/)) {
+    const minutes = parseInt(expr.match(/\d+/)[0]);
+    return new Date(now.getTime() + minutes * 60 * 1000);
+  }
+
+  if (expr.match(/en (\d+) (hora|horas)/)) {
+    const hours = parseInt(expr.match(/\d+/)[0]);
+    return new Date(now.getTime() + hours * 60 * 60 * 1000);
+  }
+
+  if (expr.match(/en (\d+) (día|días|dia|dias)/)) {
+    const days = parseInt(expr.match(/\d+/)[0]);
+    const date = new Date(now);
+    date.setDate(date.getDate() + days);
+    return date;
+  }
+
+  // Tomorrow/Mañana
+  if (expr.match(/ma[ñn]ana/i) || expr.match(/tomorrow/i)) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Check if time is specified
+    const timeMatch = expr.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1]);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const meridiem = timeMatch[3];
+
+      if (meridiem && meridiem.toLowerCase() === 'pm' && hours < 12) {
+        hours += 12;
+      } else if (meridiem && meridiem.toLowerCase() === 'am' && hours === 12) {
+        hours = 0;
+      }
+
+      tomorrow.setHours(hours, minutes, 0, 0);
+    } else {
+      tomorrow.setHours(9, 0, 0, 0); // Default 9 AM
+    }
+
+    return tomorrow;
+  }
+
+  // Specific days of the week
+  const daysOfWeek = {
+    'lunes': 1, 'monday': 1,
+    'martes': 2, 'tuesday': 2,
+    'miércoles': 3, 'miercoles': 3, 'wednesday': 3,
+    'jueves': 4, 'thursday': 4,
+    'viernes': 5, 'friday': 5,
+    'sábado': 6, 'sabado': 6, 'saturday': 6,
+    'domingo': 0, 'sunday': 0
+  };
+
+  for (const [dayName, dayNum] of Object.entries(daysOfWeek)) {
+    if (expr.includes(dayName)) {
+      const targetDate = new Date(now);
+      const currentDay = targetDate.getDay();
+      let daysUntilTarget = dayNum - currentDay;
+
+      if (daysUntilTarget <= 0) {
+        daysUntilTarget += 7; // Next week
+      }
+
+      targetDate.setDate(targetDate.getDate() + daysUntilTarget);
+
+      // Check if time is specified
+      const timeMatch = expr.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+      if (timeMatch) {
+        let hours = parseInt(timeMatch[1]);
+        const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+        const meridiem = timeMatch[3];
+
+        if (meridiem && meridiem.toLowerCase() === 'pm' && hours < 12) {
+          hours += 12;
+        } else if (meridiem && meridiem.toLowerCase() === 'am' && hours === 12) {
+          hours = 0;
+        }
+
+        targetDate.setHours(hours, minutes, 0, 0);
+      } else {
+        targetDate.setHours(9, 0, 0, 0); // Default 9 AM
+      }
+
+      return targetDate;
+    }
+  }
+
+  // Try to parse as ISO date or standard date format
+  try {
+    const parsedDate = new Date(expression);
+    if (!isNaN(parsedDate.getTime())) {
+      return parsedDate;
+    }
+  } catch (e) {
+    // Fall through
+  }
+
+  // Default: 1 hour from now
+  return new Date(now.getTime() + 60 * 60 * 1000);
 }
 
 /**
  * Execute a tool call - Privacy-Aware Edition
  */
 async function executeTool(toolName, args, context) {
-  const { phoneNumber, userTitle, isAdmin, mediaAnalysis } = context;
+  const { phoneNumber, user, isAdmin, mediaAnalysis } = context;
 
   console.log(`🔧 Executing tool: ${toolName} with args:`, JSON.stringify(args, null, 2));
 
@@ -187,7 +398,7 @@ async function executeTool(toolName, args, context) {
         // Save to MongoDB with full metadata
         const savedFile = await saveMediaFile({
           ownerPhoneNumber: phoneNumber,
-          ownerTitle: userTitle,
+          ownerTitle: user?.alias || user?.title || phoneNumber,
           url: mediaAnalysis.url, // S3/R2 URL
           s3Key: mediaAnalysis.s3Key,
           filename: filename,
@@ -280,7 +491,7 @@ async function executeTool(toolName, args, context) {
         const result = await requestFileAccess(
           file_id,
           phoneNumber,
-          userTitle
+          user?.alias || user?.title || phoneNumber
         );
 
         return result;
@@ -335,6 +546,127 @@ async function executeTool(toolName, args, context) {
         };
       }
 
+      case 'schedule_reminder': {
+        const { when, description, recipients, frequency } = args;
+
+        // Parse natural language time
+        const executionTime = parseNaturalTime(when);
+
+        // Default recipients to current user
+        const recipientList = recipients && recipients.length > 0
+          ? recipients
+          : ['yo'];
+
+        // Default frequency to 'once'
+        const recurrence = frequency || 'once';
+
+        // Convert frequency to Agenda repeat format
+        const repeatMapping = {
+          'once': null,
+          'daily': '1 day',
+          'weekly': '1 week',
+          'monthly': '1 month',
+          'yearly': '1 year'
+        };
+        const repeatInterval = repeatMapping[recurrence];
+
+        console.log(`📅 Scheduling ${recurrence} reminder for: ${executionTime.toISOString()}`);
+        console.log(`   Description: ${description}`);
+        console.log(`   Recipients: ${recipientList.join(', ')}`);
+        console.log(`   Recurrence: ${repeatInterval || 'one-time'}`);
+
+        try {
+          const result = await scheduleReminder(
+            executionTime,
+            recipientList,
+            description,
+            phoneNumber.replace('whatsapp:', ''),
+            repeatInterval
+          );
+
+          if (!result.success) {
+            return {
+              success: false,
+              error: result.error || 'Failed to schedule reminder'
+            };
+          }
+
+          // Format confirmation message
+          const timeString = executionTime.toLocaleString('es-ES', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+
+          // Add recurrence info to message
+          const recurrenceText = recurrence !== 'once'
+            ? ` (se repetirá ${recurrence === 'yearly' ? 'anualmente' : recurrence === 'monthly' ? 'mensualmente' : recurrence === 'weekly' ? 'semanalmente' : 'diariamente'})`
+            : '';
+
+          return {
+            success: true,
+            message: `Reminder scheduled successfully`,
+            scheduled_for: result.scheduledFor,
+            scheduled_for_readable: timeString + recurrenceText,
+            recipient_count: result.recipientCount,
+            recipients: result.recipients,
+            job_id: result.jobId,
+            description: description,
+            frequency: recurrence,
+            repeat_interval: repeatInterval
+          };
+
+        } catch (error) {
+          console.error('Error scheduling reminder:', error);
+          return {
+            success: false,
+            error: `Failed to schedule: ${error.message}`
+          };
+        }
+      }
+
+      case 'get_current_time': {
+        // Simple synchronous function - returns current date/time
+        const now = new Date();
+        const isoString = now.toISOString();
+
+        // Also provide human-readable formats for convenience
+        const readable = {
+          date: now.toLocaleDateString('es-ES', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          }),
+          time: now.toLocaleTimeString('es-ES', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+          }),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+
+        console.log(`🕐 Current time requested: ${isoString}`);
+
+        return {
+          success: true,
+          iso: isoString,
+          timestamp: now.getTime(),
+          year: now.getFullYear(),
+          month: now.getMonth() + 1, // JavaScript months are 0-indexed
+          day: now.getDate(),
+          hour: now.getHours(),
+          minute: now.getMinutes(),
+          second: now.getSeconds(),
+          dayOfWeek: now.getDay(), // 0 = Sunday
+          readable: readable
+        };
+      }
+
       default:
         return {
           success: false,
@@ -358,16 +690,56 @@ async function processMessage(options) {
   const {
     userMessage,
     conversationHistory,
-    userTitle,
     phoneNumber,
-    isAdmin,
     hasMediaAttached,
     mediaType,
     mediaAnalysis
   } = options;
 
+  // CRITICAL: Retrieve user context from MongoDB BEFORE generating prompt
+  console.log(`🔍 Looking up user profile for ${phoneNumber}...`);
+
+  let user = null;
+  let isAdmin = false;
+
+  try {
+    // Extract clean phone number (remove whatsapp: prefix if present)
+    const cleanPhone = phoneNumber.replace('whatsapp:', '');
+
+    // Look up user in MongoDB
+    user = await User.findOne({ phoneNumber: cleanPhone });
+
+    if (user) {
+      console.log(`✅ User found: ${user.alias || user.title || user.fullName || 'Unknown'}`);
+      console.log(`   Full Name: ${user.fullName || 'N/A'}`);
+      console.log(`   Email: ${user.email || 'Not Set'}`);
+      console.log(`   Admin: ${user.isAdmin || false}`);
+
+      isAdmin = user.isAdmin || false;
+    } else {
+      console.log(`⚠️  User not found in database. Using fallback alias.`);
+      // Create a minimal user object for fallback
+      user = {
+        phoneNumber: cleanPhone,
+        alias: 'Estimado Usuario/a',
+        fullName: null,
+        email: null
+      };
+    }
+  } catch (error) {
+    console.error(`❌ Error looking up user:`, error);
+    // Use fallback on error
+    user = {
+      phoneNumber: phoneNumber.replace('whatsapp:', ''),
+      alias: 'Estimado Usuario/a',
+      fullName: null,
+      email: null
+    };
+  }
+
+  // Build system prompt with user context
   const systemPrompt = buildSystemPrompt(
-    userTitle,
+    user,
     isAdmin,
     hasMediaAttached,
     mediaType,
@@ -391,7 +763,7 @@ async function processMessage(options) {
     content: userMessage || '(user sent media without text message)'
   });
 
-  console.log(`🤖 Agent processing message from ${phoneNumber}`);
+  console.log(`🤖 Agent processing message from ${user.alias || phoneNumber}`);
   console.log(`   Admin: ${isAdmin}, Media: ${hasMediaAttached}, Type: ${mediaType}`);
   console.log(`   Message: "${userMessage?.substring(0, 100)}..."`);
 
@@ -430,8 +802,8 @@ async function processMessage(options) {
 
         // Execute the tool
         const toolResult = await executeTool(toolName, toolArgs, {
-          phoneNumber,
-          userTitle,
+          phoneNumber: phoneNumber.replace('whatsapp:', ''),
+          user,
           isAdmin,
           mediaAnalysis
         });
@@ -468,8 +840,33 @@ async function processMessage(options) {
   };
 }
 
+/**
+ * Send a WhatsApp message via Twilio
+ * Utility function for other services
+ */
+async function sendWhatsAppMessage(to, message, twilioClient) {
+  if (!twilioClient) {
+    const twilio = require('twilio');
+    twilioClient = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+  }
+
+  const toNumber = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
+
+  const result = await twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_NUMBER,
+    to: toNumber,
+    body: message
+  });
+
+  return result;
+}
+
 module.exports = {
   processMessage,
   buildSystemPrompt,
-  executeTool
+  executeTool,
+  sendWhatsAppMessage
 };

@@ -108,6 +108,52 @@ const tools = [
         }
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_reminder',
+      description: 'Schedule a WhatsApp reminder (one-time or recurring). Supports natural language time and recurrence patterns. IMPORTANT: Gather ALL info (task, time, frequency) in ONE turn before calling.',
+      parameters: {
+        type: 'object',
+        properties: {
+          when: {
+            type: 'string',
+            description: 'Natural language time expression. Examples: "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM", "10 de diciembre a las 8 AM", "December 10 at 8 AM"'
+          },
+          description: {
+            type: 'string',
+            description: 'The reminder message to send (what the user should be reminded about)'
+          },
+          recipients: {
+            type: 'array',
+            items: {
+              type: 'string'
+            },
+            description: 'Who receives the reminder. Default: ["yo"] for current user. Can include names like "Max", "Vinicio"',
+            default: ['yo']
+          },
+          frequency: {
+            type: 'string',
+            enum: ['once', 'daily', 'weekly', 'monthly', 'yearly'],
+            description: 'Recurrence pattern. "once" = one-time (default). "yearly" = birthdays/anniversaries. "monthly" = monthly bills. "weekly" = weekly meetings. "daily" = daily tasks.',
+            default: 'once'
+          }
+        },
+        required: ['when', 'description']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_current_time',
+      description: 'Get the current date and time. Use this when user asks "what time is it", "what day is today", "what\'s the date", or when you need current time for calculations (age, days until event, etc.).',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
   }
 ];
 

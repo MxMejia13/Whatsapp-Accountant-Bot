@@ -154,6 +154,7 @@ UserSchema.pre('save', function(next) {
   next();
 });
 
-const User = mongoose.model('User', UserSchema);
+// Prevent OverwriteModelError by checking if model already exists
+const User = mongoose.models.User || mongoose.model('User', UserSchema);
 
 module.exports = User;

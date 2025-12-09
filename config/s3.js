@@ -3,9 +3,11 @@
  *
  * Single source of truth for cloud storage client
  * Works with both AWS S3 and Cloudflare R2 (S3-compatible)
+ *
+ * Uses AWS SDK v3 (modular imports)
  */
 
-const AWS = require('aws-sdk');
+const { S3Client } = require('@aws-sdk/client-s3');
 
 // Validate required environment variables
 const requiredEnvVars = [
@@ -21,13 +23,14 @@ if (missingVars.length > 0) {
 }
 
 // Configure S3 client (works with both S3 and R2)
-const s3Client = new AWS.S3({
+const s3Client = new S3Client({
   endpoint: process.env.CLOUD_STORAGE_ENDPOINT || undefined, // For R2: https://<account-id>.r2.cloudflarestorage.com
-  accessKeyId: process.env.CLOUD_STORAGE_ACCESS_KEY,
-  secretAccessKey: process.env.CLOUD_STORAGE_SECRET_KEY,
   region: process.env.CLOUD_STORAGE_REGION || 'auto', // 'auto' for R2, 'us-east-1' for S3
-  signatureVersion: 'v4',
-  s3ForcePathStyle: false // Use virtual-hosted-style URLs
+  credentials: {
+    accessKeyId: process.env.CLOUD_STORAGE_ACCESS_KEY,
+    secretAccessKey: process.env.CLOUD_STORAGE_SECRET_KEY
+  },
+  forcePathStyle: false // Use virtual-hosted-style URLs
 });
 
 // Bucket name

@@ -15,10 +15,7 @@ async function connectMongoDB() {
   }
 
   try {
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
     return mongoose.connection;
   } catch (error) {
@@ -187,6 +184,20 @@ const PendingConfirmationSchema = new Schema({
 
 PendingConfirmationSchema.index({ userId: 1, status: 1 });
 
+/**
+ * ConversationHistory Schema
+ * Stores message history for context preservation
+ */
+const ConversationHistorySchema = new Schema({
+  phoneNumber: { type: String, required: true, index: true },
+  role: { type: String, enum: ['user', 'assistant'], required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now, index: true, expires: '7d' } // Auto-delete after 7 days
+});
+
+// Compound index for efficient queries
+ConversationHistorySchema.index({ phoneNumber: 1, createdAt: -1 });
+
 // ============================================================================
 // MODELS
 // ============================================================================
@@ -195,6 +206,7 @@ const MediaFile = mongoose.model('MediaFile', MediaFileSchema);
 const User = mongoose.model('User', UserSchema);
 const AccessRequest = mongoose.model('AccessRequest', AccessRequestSchema);
 const PendingConfirmation = mongoose.model('PendingConfirmation', PendingConfirmationSchema);
+const ConversationHistory = mongoose.model('ConversationHistory', ConversationHistorySchema);
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -422,6 +434,120 @@ async function updateAccessRequestStatus(requestId, status) {
   return request;
 }
 
+/**
+ * Save a message to conversation history
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} role - 'user' or 'assistant'
+ * @param {string} content - Message content
+ */
+async function saveMessageToHistory(phoneNumber, role, content) {
+  if (!content || !content.trim()) {
+    return; // Skip empty messages
+  }
+
+  const message = new ConversationHistory({
+    phoneNumber: phoneNumber.replace('whatsapp:', ''), // Clean phone number
+    role,
+    content: content.trim()
+  });
+
+  await message.save();
+}
+
+/**
+ * Get conversation history for a user
+ * @param {string} phoneNumber - User's phone number
+ * @param {number} limit - Number of messages to retrieve (default: 10 = ~5 exchanges)
+ * @returns {Promise<Array>} - Array of messages {role, content}
+ */
+async function getConversationHistory(phoneNumber, limit = 10) {
+  const cleanPhone = phoneNumber.replace('whatsapp:', '');
+
+  const messages = await ConversationHistory.find({ phoneNumber: cleanPhone })
+    .sort({ createdAt: -1 }) // Most recent first
+    .limit(limit)
+    .select('role content -_id') // Only return role and content
+    .lean();
+
+  // Reverse to get chronological order (oldest first)
+  return messages.reverse();
+}
+
+/**
+ * Clear conversation history for a user (optional - for privacy)
+ * @param {string} phoneNumber - User's phone number
+ */
+async function clearConversationHistory(phoneNumber) {
+  const cleanPhone = phoneNumber.replace('whatsapp:', '');
+  await ConversationHistory.deleteMany({ phoneNumber: cleanPhone });
+}
+
+/**
+ * Resolve a user's name/alias to their phone number
+ * Used by scheduler to convert recipient names to phone numbers
+ * @param {string} name - User's alias, full name, or email
+ * @returns {Promise<string|null>} - Phone number or null if not found
+ */
+async function resolveNameToPhone(name) {
+  if (!name || typeof name !== 'string') {
+    return null;
+  }
+
+  const nameLower = name.toLowerCase().trim();
+
+  // Try to find by alias
+  let user = await User.findOne({
+    alias: { $regex: new RegExp(`^${nameLower}$`, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  // Try to find by full name
+  user = await User.findOne({
+    fullName: { $regex: new RegExp(nameLower, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  // Try to find by email
+  user = await User.findOne({
+    email: { $regex: new RegExp(`^${nameLower}$`, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  return null;
+}
+
+/**
+ * Get user's display name (alias or full name)
+ * @param {string} phoneNumber - User's phone number
+ * @returns {Promise<string>} - Display name or phone number
+ */
+async function getUserDisplayName(phoneNumber) {
+  if (!phoneNumber) {
+    return 'Unknown';
+  }
+
+  const cleanPhone = phoneNumber.replace('whatsapp:', '').replace('+', '');
+
+  const user = await User.findOne({
+    phoneNumber: { $regex: new RegExp(cleanPhone) }
+  }).lean();
+
+  if (user) {
+    return user.alias || user.fullName || user.phoneNumber;
+  }
+
+  return phoneNumber;
+}
+
 module.exports = {
   connectMongoDB,
   MediaFile,
@@ -439,5 +565,10 @@ module.exports = {
   grantFileAccess,
   createAccessRequest,
   getPendingAccessRequest,
-  updateAccessRequestStatus
+  updateAccessRequestStatus,
+  saveMessageToHistory,
+  getConversationHistory,
+  clearConversationHistory,
+  resolveNameToPhone,
+  getUserDisplayName
 };

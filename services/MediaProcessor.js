@@ -6,7 +6,6 @@
  * - Audio Heuristic (Direct voice vs Forwarded audio)
  * - Vision Analysis (OCR, document type detection)
  * - Smart Save (Auto-save if confident, ask if unsure)
- * - Complete R2 Upload Pipeline with Error Handling
  */
 
 const OpenAI = require('openai');
@@ -23,13 +22,6 @@ const AUTO_SAVE_CONFIDENCE = 80;
 /**
  * Process media BEFORE passing to main Agent
  * Returns processed result with instructions for Agent
- *
- * CRITICAL: This function handles the COMPLETE pipeline:
- * 1. Download from Twilio (done by caller - index.js)
- * 2. Analyze media (Vision/Whisper)
- * 3. Upload to R2 Storage
- * 4. Save metadata to MongoDB
- * 5. Return result with all required fields
  */
 async function processMedia(options) {
   const {
@@ -44,17 +36,13 @@ async function processMedia(options) {
 
   try {
     // =========================================================================
-    // INPUT VALIDATION - CRITICAL FIRST STEP
+    // INPUT VALIDATION
     // =========================================================================
 
     if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer) || mediaBuffer.length === 0) {
       console.error('❌ Invalid or empty media buffer received');
-      console.error('   Buffer exists:', !!mediaBuffer);
-      console.error('   Is Buffer:', Buffer.isBuffer(mediaBuffer));
-      console.error('   Length:', mediaBuffer?.length || 0);
       return {
         action: 'ERROR',
-        error: 'Invalid or empty media buffer',
         message: 'Lo siento, no pude descargar el archivo multimedia. Por favor, intenta enviarlo de nuevo.'
       };
     }
@@ -63,23 +51,11 @@ async function processMedia(options) {
       console.error('❌ Invalid MIME type received:', mimeType);
       return {
         action: 'ERROR',
-        error: 'Invalid MIME type',
         message: 'Lo siento, el tipo de archivo no es reconocido. Por favor, intenta con otro formato.'
       };
     }
 
-    if (!userId) {
-      console.error('❌ userId is required but was not provided');
-      return {
-        action: 'ERROR',
-        error: 'Missing userId',
-        message: 'Lo siento, hubo un error identificando tu cuenta. Por favor, intenta de nuevo.'
-      };
-    }
-
     console.log(`\n🎬 MediaProcessor: Processing ${mimeType} (${mediaBuffer.length} bytes, Forwarded: ${isForwarded})`);
-    console.log(`   User: ${userTitle || userId}`);
-    console.log(`   Original Name: ${originalName || 'unknown'}`);
 
     // =========================================================================
     // AUDIO HEURISTIC: Critical Decision Point
@@ -129,10 +105,8 @@ async function processMedia(options) {
 
   } catch (error) {
     console.error('❌ Fatal error in processMedia:', error);
-    console.error('   Stack:', error.stack);
     return {
       action: 'ERROR',
-      error: error.message,
       message: 'Lo siento, hubo un error procesando tu archivo. Por favor, intenta de nuevo.'
     };
   }
@@ -155,12 +129,7 @@ async function processAudio(options) {
   try {
     // Validate buffer
     if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer) || mediaBuffer.length === 0) {
-      console.error('❌ Invalid audio buffer');
-      return {
-        action: 'ERROR',
-        error: 'Invalid audio buffer',
-        message: 'Lo siento, el archivo de audio está corrupto o vacío. Por favor, intenta enviarlo de nuevo.'
-      };
+      throw new Error('Invalid audio buffer');
     }
 
     console.log(`🎙️  Audio Heuristic: ${isForwarded ? 'FORWARDED' : 'DIRECT'} (${mediaBuffer.length} bytes)`);
@@ -181,7 +150,6 @@ async function processAudio(options) {
       console.log('⚠️  Empty transcription received');
       return {
         action: 'ERROR',
-        error: 'Empty transcription',
         message: 'No pude transcribir el audio. Por favor, asegúrate de que el audio tenga contenido hablado.'
       };
     }
@@ -234,7 +202,7 @@ async function processAudio(options) {
         message: `✅ Audio guardado como "${savedFile.filename}". Transcripción: "${transcribedText.substring(0, 150)}..."`
       };
     } else {
-      // ASK USER (low confidence - shouldn't happen for audio but kept for completeness)
+      // ASK USER
       const pending = await createPendingConfirmation({
         userId,
         mediaBuffer,
@@ -256,10 +224,8 @@ async function processAudio(options) {
 
   } catch (error) {
     console.error('❌ Error processing audio:', error);
-    console.error('   Stack:', error.stack);
     return {
       action: 'ERROR',
-      error: error.message,
       message: 'Lo siento, hubo un error procesando el audio. Por favor, intenta enviarlo de nuevo.'
     };
   }
@@ -267,7 +233,6 @@ async function processAudio(options) {
 
 /**
  * Image Processing with Vision Analysis
- * CRITICAL: This function MUST return url and s3Key for MongoDB
  */
 async function processImage(options) {
   const {
@@ -289,7 +254,6 @@ async function processImage(options) {
       console.error('❌ Invalid image buffer: buffer is null or not a Buffer');
       return {
         action: 'ERROR',
-        error: 'Invalid image buffer',
         message: 'Lo siento, no pude procesar la imagen. El archivo parece estar corrupto o vacío.'
       };
     }
@@ -298,7 +262,6 @@ async function processImage(options) {
       console.error('❌ Invalid image buffer: buffer is empty (0 bytes)');
       return {
         action: 'ERROR',
-        error: 'Empty image buffer',
         message: 'Lo siento, la imagen está vacía. Por favor, intenta enviarla de nuevo.'
       };
     }
@@ -307,7 +270,6 @@ async function processImage(options) {
       console.error('❌ Invalid MIME type for image:', mimeType);
       return {
         action: 'ERROR',
-        error: 'Invalid MIME type',
         message: 'Lo siento, el archivo no parece ser una imagen válida.'
       };
     }
@@ -315,7 +277,7 @@ async function processImage(options) {
     console.log(`👁️  Vision Analysis starting... (${mediaBuffer.length} bytes, ${mimeType})`);
 
     // =========================================================================
-    // SAFE BASE64 CONVERSION
+    // SAFE BASE64 CONVERSION - LINE 198 FIX
     // =========================================================================
 
     let base64Image;
@@ -329,7 +291,6 @@ async function processImage(options) {
       console.error('❌ Error converting buffer to base64:', conversionError);
       return {
         action: 'ERROR',
-        error: 'Base64 conversion failed',
         message: 'Lo siento, no pude procesar la imagen. Por favor, intenta enviarla de nuevo.'
       };
     }
@@ -387,20 +348,13 @@ BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card w
 
       analysis = JSON.parse(visionResponse.choices[0].message.content);
 
-      // Validate analysis object has required fields
+      // Validate analysis object
       if (!analysis.documentType || !analysis.filename) {
         throw new Error('Vision analysis missing required fields');
       }
 
-      // Ensure arrays exist (even if empty)
-      analysis.keywords = analysis.keywords || [];
-      analysis.detectedText = analysis.detectedText || '';
-      analysis.description = analysis.description || '';
-      analysis.confidence = analysis.confidence || 50;
-
     } catch (visionError) {
       console.error('❌ Error in vision analysis:', visionError);
-      console.error('   Stack:', visionError.stack);
 
       // Fallback: Ask user to describe the image
       const pending = await createPendingConfirmation({
@@ -478,10 +432,8 @@ BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card w
 
   } catch (error) {
     console.error('❌ Fatal error in processImage:', error);
-    console.error('   Stack:', error.stack);
     return {
       action: 'ERROR',
-      error: error.message,
       message: 'Lo siento, hubo un error grave procesando la imagen. Por favor, intenta de nuevo.'
     };
   }
@@ -507,7 +459,6 @@ async function processDocument(options) {
       console.error('❌ Invalid document buffer');
       return {
         action: 'ERROR',
-        error: 'Invalid document buffer',
         message: 'Lo siento, no pude procesar el documento. Por favor, intenta enviarlo de nuevo.'
       };
     }
@@ -535,10 +486,8 @@ async function processDocument(options) {
 
   } catch (error) {
     console.error('❌ Error processing document:', error);
-    console.error('   Stack:', error.stack);
     return {
       action: 'ERROR',
-      error: error.message,
       message: 'Lo siento, hubo un error procesando el documento. Por favor, intenta de nuevo.'
     };
   }
@@ -546,7 +495,6 @@ async function processDocument(options) {
 
 /**
  * Save audio file to cloud and MongoDB
- * CRITICAL: Uploads to R2 FIRST, then saves to MongoDB with url and s3Key
  */
 async function saveAudioFile(data) {
   const { mediaBuffer, mimeType, originalName, userId, userTitle, transcribedText, filenameSuggestion, confidence } = data;
@@ -554,66 +502,45 @@ async function saveAudioFile(data) {
   try {
     // Validate inputs
     if (!mediaBuffer || !userId) {
-      throw new Error('Missing required fields: mediaBuffer or userId');
+      throw new Error('Missing required fields for saveAudioFile');
     }
 
-    console.log(`💾 Saving audio file: ${filenameSuggestion}`);
-
-    // =========================================================================
-    // STEP 1: Upload to R2 Cloud Storage (MUST HAPPEN FIRST)
-    // =========================================================================
-
-    console.log(`   Step 1/2: Uploading to R2...`);
+    // Upload to cloud storage
     const uploadResult = await uploadFile(mediaBuffer, {
       mimeType,
-      originalName: originalName || 'audio.ogg',
+      originalName,
       userId,
       isForwarded: true
     });
 
-    // Validate upload result
-    if (!uploadResult || !uploadResult.url || !uploadResult.key) {
-      throw new Error('Upload to R2 failed: missing url or key in response');
-    }
-
-    console.log(`   ✅ R2 Upload complete: ${uploadResult.url}`);
-
-    // =========================================================================
-    // STEP 2: Save metadata to MongoDB (AFTER R2 upload)
-    // =========================================================================
-
-    console.log(`   Step 2/2: Saving to MongoDB...`);
+    // Save metadata to MongoDB
     const mediaFile = await saveMediaFile({
       userId,
       userTitle,
-      s3Url: uploadResult.url,       // ← REQUIRED FIELD
-      s3Key: uploadResult.key,        // ← REQUIRED FIELD
-      filename: filenameSuggestion,   // ← REQUIRED FIELD
+      s3Url: uploadResult.url,
+      s3Key: uploadResult.key,
+      filename: filenameSuggestion,
       description: `Audio: ${transcribedText.substring(0, 200)}`,
       keywords: extractKeywords(transcribedText),
       detectedText: transcribedText,
       documentType: 'audio',
       confidence,
-      originalName: originalName || 'audio.ogg',
-      mimeType,                       // ← REQUIRED FIELD
+      originalName,
+      mimeType,
       fileSize: uploadResult.size,
       isForwarded: true
     });
-
-    console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);
 
     return mediaFile;
 
   } catch (error) {
     console.error('❌ Error in saveAudioFile:', error);
-    console.error('   Stack:', error.stack);
     throw error; // Re-throw to be caught by calling function
   }
 }
 
 /**
  * Save image file to cloud and MongoDB
- * CRITICAL: Uploads to R2 FIRST, then saves to MongoDB with url and s3Key
  */
 async function saveImageFile(data) {
   const { mediaBuffer, mimeType, originalName, userId, userTitle, analysis, userMessage, isForwarded } = data;
@@ -621,59 +548,39 @@ async function saveImageFile(data) {
   try {
     // Validate inputs
     if (!mediaBuffer || !userId || !analysis) {
-      throw new Error('Missing required fields: mediaBuffer, userId, or analysis');
+      throw new Error('Missing required fields for saveImageFile');
     }
 
-    console.log(`💾 Saving image file: ${analysis.filename}`);
-
-    // =========================================================================
-    // STEP 1: Upload to R2 Cloud Storage (MUST HAPPEN FIRST)
-    // =========================================================================
-
-    console.log(`   Step 1/2: Uploading to R2...`);
+    // Upload to cloud storage
     const uploadResult = await uploadFile(mediaBuffer, {
       mimeType,
-      originalName: originalName || 'image.jpg',
+      originalName,
       userId,
-      isForwarded: isForwarded || false
+      isForwarded
     });
 
-    // Validate upload result
-    if (!uploadResult || !uploadResult.url || !uploadResult.key) {
-      throw new Error('Upload to R2 failed: missing url or key in response');
-    }
-
-    console.log(`   ✅ R2 Upload complete: ${uploadResult.url}`);
-
-    // =========================================================================
-    // STEP 2: Save metadata to MongoDB (AFTER R2 upload)
-    // =========================================================================
-
-    console.log(`   Step 2/2: Saving to MongoDB...`);
+    // Save metadata to MongoDB
     const mediaFile = await saveMediaFile({
       userId,
       userTitle,
-      s3Url: uploadResult.url,       // ← REQUIRED FIELD
-      s3Key: uploadResult.key,        // ← REQUIRED FIELD
-      filename: analysis.filename,    // ← REQUIRED FIELD
-      description: analysis.description || '',
-      keywords: analysis.keywords || [],
-      detectedText: analysis.detectedText || '',
-      documentType: analysis.documentType || 'photo',
-      confidence: analysis.confidence || 0,
-      originalName: originalName || 'image.jpg',
-      mimeType,                       // ← REQUIRED FIELD
+      s3Url: uploadResult.url,
+      s3Key: uploadResult.key,
+      filename: analysis.filename,
+      description: analysis.description,
+      keywords: analysis.keywords,
+      detectedText: analysis.detectedText,
+      documentType: analysis.documentType,
+      confidence: analysis.confidence,
+      originalName,
+      mimeType,
       fileSize: uploadResult.size,
-      isForwarded: isForwarded || false
+      isForwarded
     });
-
-    console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);
 
     return mediaFile;
 
   } catch (error) {
     console.error('❌ Error in saveImageFile:', error);
-    console.error('   Stack:', error.stack);
     throw error; // Re-throw to be caught by calling function
   }
 }
@@ -685,11 +592,9 @@ async function createPendingConfirmation(data) {
   try {
     const pending = new PendingConfirmation(data);
     await pending.save();
-    console.log(`💾 Pending confirmation created: ${pending._id}`);
     return pending;
   } catch (error) {
     console.error('❌ Error creating pending confirmation:', error);
-    console.error('   Stack:', error.stack);
     throw error;
   }
 }
@@ -699,10 +604,6 @@ async function createPendingConfirmation(data) {
  */
 async function generateAudioFilename(transcribedText) {
   try {
-    if (!transcribedText || transcribedText.trim().length === 0) {
-      return 'audio-file';
-    }
-
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [{
