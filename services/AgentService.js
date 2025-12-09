@@ -994,13 +994,13 @@ async function executeTool(toolName, args, context) {
             socketTimeout: 10000
           };
 
-          // Add TLS configuration for port 587
+          // Add TLS configuration for port 587 (STARTTLS)
           if (!isSecurePort) {
             transportConfig.tls = {
-              ciphers: 'SSLv3',
-              rejectUnauthorized: false // For development; set true in production
+              rejectUnauthorized: false, // Accept self-signed certificates (for development)
+              minVersion: 'TLSv1.2' // Use modern TLS (Resend compatible)
             };
-            transportConfig.requireTLS = true;
+            transportConfig.requireTLS = true; // Force STARTTLS upgrade
           }
 
           console.log(`📧 Configuring SMTP: ${transportConfig.host}:${transportConfig.port} (secure: ${transportConfig.secure})`);
