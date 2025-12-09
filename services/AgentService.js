@@ -842,25 +842,77 @@ async function executeTool(toolName, args, context) {
           let resolvedEmail = recipientInput;
           let resolvedAlias = null;
 
-          // Check if recipientInput looks like an email (contains @)
-          if (!recipientInput.includes('@')) {
-            // Treat as user alias - lookup in database
-            console.log(`🔍 Recipient "${recipientInput}" appears to be a user alias, looking up email...`);
+          // Email validation regex (RFC 5322 simplified)
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          const isValidEmail = emailRegex.test(recipientInput);
 
-            const userByAlias = await User.findOne({
-              alias: { $regex: new RegExp(`^${recipientInput}$`, 'i') }
+          // If not a valid email format, treat as user alias and lookup
+          if (!isValidEmail) {
+            console.log(`🔍 "${recipientInput}" is not a valid email format - treating as user alias`);
+            console.log(`   Searching for user in database...`);
+
+            // Try multiple lookup strategies
+            let user = null;
+
+            // Strategy 1: Try alias field (case-insensitive)
+            user = await User.findOne({
+              alias: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
             });
 
-            if (userByAlias && userByAlias.email) {
-              resolvedEmail = userByAlias.email;
-              resolvedAlias = userByAlias.alias;
-              console.log(`✅ Resolved alias "${recipientInput}" → ${resolvedEmail}`);
+            // Strategy 2: If not found, try fullName field
+            if (!user) {
+              console.log(`   Alias not found, trying fullName field...`);
+              user = await User.findOne({
+                fullName: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
+              });
+            }
+
+            // Strategy 3: If still not found, try legacy name field
+            if (!user) {
+              console.log(`   fullName not found, trying name field...`);
+              user = await User.findOne({
+                name: { $regex: new RegExp(`^${recipientInput.trim()}$`, 'i') }
+              });
+            }
+
+            // Check if user was found and has email
+            if (user) {
+              if (user.email && user.email.trim()) {
+                resolvedEmail = user.email;
+                resolvedAlias = user.alias || user.fullName || user.name;
+                console.log(`✅ Resolved "${recipientInput}" → ${resolvedEmail} (${resolvedAlias})`);
+              } else {
+                console.error(`❌ User "${recipientInput}" found but has no email configured`);
+                console.error(`   User ID: ${user._id}`);
+                console.error(`   Alias: ${user.alias}`);
+                console.error(`   Email: ${user.email || 'NULL'}`);
+
+                return {
+                  success: false,
+                  error: `Found user "${recipientInput}" but they have no email address configured in the system. Please ask them to set up their email first, or use a direct email address.`
+                };
+              }
             } else {
+              console.error(`❌ User "${recipientInput}" not found in database`);
+              console.error(`   Tried searching: alias, fullName, name fields`);
+
               return {
                 success: false,
-                error: `User alias "${recipientInput}" not found or has no email configured. Please use a valid email address or ensure the user has an email set.`
+                error: `User "${recipientInput}" not found in the system. Please use a valid email address (e.g., user@example.com) or ensure the user is registered with that alias.`
               };
             }
+          } else {
+            // Valid email format detected
+            console.log(`✅ "${recipientInput}" is a valid email format - using directly`);
+            resolvedEmail = recipientInput;
+          }
+
+          // Final validation: ensure we have a valid email
+          if (!resolvedEmail || !emailRegex.test(resolvedEmail)) {
+            return {
+              success: false,
+              error: `Failed to resolve "${recipientInput}" to a valid email address. Final resolved value: ${resolvedEmail || 'NULL'}`
+            };
           }
 
           // ===============================================
@@ -884,8 +936,11 @@ async function executeTool(toolName, args, context) {
                 resolvedS3Key = file.s3Key;
                 console.log(`✅ Resolved filename "${resolvedFilename}" → ${resolvedS3Key}`);
               } else {
-                console.warn(`⚠️  File "${resolvedS3Key}" not found in database, treating as s3Key`);
-                // Continue anyway - maybe it's a valid s3Key without slashes
+                console.warn(`⚠️  File "${resolvedS3Key}" not found in database`);
+                return {
+                  success: false,
+                  error: `File "${resolvedS3Key}" not found in the system. Please verify the filename is correct.`
+                };
               }
             } else {
               console.log(`📎 Using provided s3Key: ${resolvedS3Key}`);
