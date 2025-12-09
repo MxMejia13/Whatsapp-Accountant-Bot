@@ -119,7 +119,8 @@ async function processMedia(options) {
     userTitle,
     ownerTitle, // Alternative to userTitle
     userMessage,
-    isForwarded
+    isForwarded,
+    twilioMessageSid // Twilio Message SID for reply context linking
   } = options;
 
   // Handle parameter aliases
@@ -340,7 +341,8 @@ async function processAudio(options) {
         userTitle,
         transcribedText,
         filenameSuggestion,
-        confidence
+        confidence,
+        twilioMessageSid
       });
 
       return {
@@ -592,6 +594,7 @@ IMPORTANT:
         userTitle,
         analysis,
         userMessage,
+        twilioMessageSid,
         isForwarded
       });
 
@@ -699,7 +702,7 @@ async function processDocument(options) {
  * CRITICAL: Upload to R2 FIRST, validate, THEN save to MongoDB
  */
 async function saveAudioFile(data) {
-  const { mediaBuffer, mimeType, originalName, userId, userTitle, transcribedText, filenameSuggestion, confidence } = data;
+  const { mediaBuffer, mimeType, originalName, userId, userTitle, transcribedText, filenameSuggestion, confidence, twilioMessageSid } = data;
 
   try {
     // Validate inputs
@@ -784,7 +787,8 @@ async function saveAudioFile(data) {
       originalName: originalName || 'audio.ogg',
       mimeType,                       // ← REQUIRED
       fileSize: uploadResult.size,
-      isForwarded: true
+      isForwarded: true,
+      twilioMessageSid: twilioMessageSid // ← Link to original Twilio message for reply context
     });
 
     console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);
@@ -803,7 +807,7 @@ async function saveAudioFile(data) {
  * CRITICAL: Upload to R2 FIRST, validate, THEN save to MongoDB
  */
 async function saveImageFile(data) {
-  const { mediaBuffer, mimeType, originalName, userId, userTitle, analysis, userMessage, isForwarded } = data;
+  const { mediaBuffer, mimeType, originalName, userId, userTitle, analysis, userMessage, isForwarded, twilioMessageSid } = data;
 
   try {
     // Validate inputs
@@ -903,7 +907,10 @@ async function saveImageFile(data) {
       vendorName: analysis.vendorName || null,
       amount: analysis.amount || null,
       currency: analysis.currency || 'USD',
-      fullOcrText: analysis.fullOcrText || null
+      fullOcrText: analysis.fullOcrText || null,
+
+      // Reply Context Linking
+      twilioMessageSid: twilioMessageSid // ← Link to original Twilio message for reply context
     });
 
     console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);

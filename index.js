@@ -139,7 +139,13 @@ app.post('/webhook', async (req, res) => {
     const messageId = req.body.MessageSid;
     const numMedia = parseInt(req.body.NumMedia) || 0;
 
+    // CONTEXTUAL AWARENESS: Check if this is a reply to a previous message
+    const originalRepliedMessageSid = req.body.OriginalRepliedMessageSid || null;
+
     console.log(`📱 Received message from ${from}: ${incomingMsg}`);
+    if (originalRepliedMessageSid) {
+      console.log(`   🔗 Reply to message: ${originalRepliedMessageSid}`);
+    }
 
     // Ignore messages from the bot itself
     if (from === process.env.TWILIO_WHATSAPP_NUMBER) {
@@ -153,6 +159,36 @@ app.post('/webhook', async (req, res) => {
 
     // Get or create user in MongoDB
     const user = await getOrCreateUser(phoneNumber);
+
+    // CONTEXTUAL LOOKUP: If user is replying to a previous message, retrieve context
+    let replyContext = null;
+    if (originalRepliedMessageSid) {
+      try {
+        const { MediaFile } = require('./database/mongodb');
+        const contextFile = await MediaFile.findOne({ twilioMessageSid: originalRepliedMessageSid });
+
+        if (contextFile) {
+          replyContext = {
+            type: 'file',
+            fileId: contextFile._id,
+            filename: contextFile.filename,
+            description: contextFile.description,
+            documentType: contextFile.documentType,
+            s3Key: contextFile.s3Key,
+            detectedText: contextFile.detectedText,
+            documentDate: contextFile.documentDate,
+            vendorName: contextFile.vendorName,
+            amount: contextFile.amount,
+            createdAt: contextFile.createdAt
+          };
+          console.log(`   ✅ Found reply context: ${contextFile.filename} (${contextFile.documentType})`);
+        } else {
+          console.log(`   ⚠️  Reply context not found for message SID: ${originalRepliedMessageSid}`);
+        }
+      } catch (error) {
+        console.error(`   ❌ Error retrieving reply context:`, error);
+      }
+    }
 
     // Process media attachments if present
     if (numMedia > 0) {
@@ -170,7 +206,8 @@ app.post('/webhook', async (req, res) => {
             ownerPhoneNumber: phoneNumber,
             ownerTitle: user.title || user.name,
             userMessage: incomingMsg,
-            isForwarded: false
+            isForwarded: false,
+            twilioMessageSid: messageId // Link media to this message for future reply context
           });
 
           // Handle result based on action
@@ -212,7 +249,8 @@ app.post('/webhook', async (req, res) => {
                   hasMediaAttached: true,
                   mediaType: 'audio/voice',
                   mediaAnalysis: null,
-                  isVoice: true  // CRITICAL: Inform Agent this came from voice transcription
+                  isVoice: true,  // CRITICAL: Inform Agent this came from voice transcription
+                  replyContext: replyContext // Pass reply context if user is replying to a document/message
                 });
 
                 if (agentResponse.success) {
@@ -290,7 +328,8 @@ app.post('/webhook', async (req, res) => {
           phoneNumber: from,
           hasMediaAttached: false,
           mediaType: null,
-          mediaAnalysis: null
+          mediaAnalysis: null,
+          replyContext: replyContext // Pass reply context if user is replying to a document/message
         });
 
         if (!agentResponse.success) {

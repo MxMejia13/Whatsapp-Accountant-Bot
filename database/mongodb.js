@@ -67,6 +67,7 @@ const MediaFileSchema = new Schema({
   // CONTEXT
   isForwarded: { type: Boolean, default: false },
   twilioMediaUrl: { type: String },
+  twilioMessageSid: { type: String, unique: true, sparse: true, index: true }, // Link to original Twilio message for reply context
 
   // TIMESTAMPS
   createdAt: { type: Date, default: Date.now, index: true },

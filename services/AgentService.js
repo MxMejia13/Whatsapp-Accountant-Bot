@@ -28,7 +28,7 @@ const openai = new OpenAI({
 /**
  * Build the system prompt with user context
  */
-function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false) {
+function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false, replyContext = null) {
   // User context with alias, full name, and email
   let userContext = '';
   if (user) {
@@ -53,7 +53,24 @@ function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnal
     ? `\n\n🎤 VOICE INPUT: The user's message was transcribed from an audio note using Whisper AI. You successfully received and understood their voice message. Respond naturally and conversationally, acknowledging the spoken nature of their request. If they ask whether you can "read", "hear", "understand", or "process" audio/voice notes, confirm that YES, you can transcribe and understand voice messages perfectly.`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}${voiceContext}
+  // CONTEXTUAL AWARENESS: Reply Context
+  const replyContextMessage = replyContext
+    ? `\n\n🔗 REPLY CONTEXT: The user is replying to a previous message/document. IMPORTANT: Prioritize analyzing this context in your response.
+📄 **Document Being Replied To:**
+- **Filename:** ${replyContext.filename || 'Unknown'}
+- **Type:** ${replyContext.documentType || 'Unknown'}
+- **Description:** ${replyContext.description || 'No description available'}
+${replyContext.detectedText ? `- **Content/Text:** ${replyContext.detectedText.substring(0, 500)}${replyContext.detectedText.length > 500 ? '...' : ''}` : ''}
+${replyContext.documentDate ? `- **Document Date:** ${new Date(replyContext.documentDate).toLocaleDateString()}` : ''}
+${replyContext.vendorName ? `- **Vendor:** ${replyContext.vendorName}` : ''}
+${replyContext.amount ? `- **Amount:** $${replyContext.amount}` : ''}
+- **File ID:** ${replyContext.fileId}
+- **Uploaded:** ${replyContext.createdAt ? new Date(replyContext.createdAt).toLocaleDateString() : 'Unknown'}
+
+**Instructions:** The user's current message is in response to this document. Consider this context when generating your response. If the user is asking about "this" or "that" document, they are referring to the document above.`
+    : '';
+
+  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}${voiceContext}${replyContextMessage}
 
 ## CORE CAPABILITIES:
 - **PRIMARY FOCUS:** Document management, file storage, and accounting support
@@ -1024,7 +1041,8 @@ async function processMessage(options) {
     hasMediaAttached,
     mediaType,
     mediaAnalysis,
-    isVoice = false
+    isVoice = false,
+    replyContext = null
   } = options;
 
   // CRITICAL: Retrieve user context from MongoDB BEFORE generating prompt
@@ -1075,7 +1093,8 @@ async function processMessage(options) {
     hasMediaAttached,
     mediaType,
     mediaAnalysis,
-    isVoice
+    isVoice,
+    replyContext
   );
 
   // Build messages array for OpenAI
