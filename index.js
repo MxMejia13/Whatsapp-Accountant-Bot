@@ -5,7 +5,7 @@ const twilio = require('twilio');
 const OpenAI = require('openai');
 const { connectMongoDB, getOrCreateUser, saveMediaFile, User } = require('./database/mongodb');
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
-const { sendWhatsAppMessage } = require('./services/AgentService');
+const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -217,7 +217,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Handle text messages with AI
+    // Handle text messages with AI using AgentService
     if (incomingMsg && incomingMsg.trim()) {
       // Get or initialize conversation history
       if (!conversationHistory.has(from)) {
@@ -225,89 +225,62 @@ app.post('/webhook', async (req, res) => {
       }
       const history = conversationHistory.get(from);
 
-      // Add user message to history
-      history.push({
-        role: 'user',
-        content: incomingMsg
-      });
+      try {
+        // Process message through AgentService (includes user lookup and context injection)
+        const agentResponse = await processAgentMessage({
+          userMessage: incomingMsg,
+          conversationHistory: history,
+          phoneNumber: from,
+          hasMediaAttached: false,
+          mediaType: null,
+          mediaAnalysis: null
+        });
 
-      // Keep only last 20 messages
-      if (history.length > 20) {
-        history.splice(0, history.length - 20);
-      }
-
-      // Build conversation context for OpenAI
-      const systemPrompt = `Eres un asistente útil de WhatsApp. Proporcionas respuestas amigables e informativas a preguntas y ayudas con varias tareas.
-
-Sé conversacional, útil y conciso. Mantén las respuestas breves y fáciles de leer en dispositivos móviles. Responde siempre en español.`;
-
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        ...history
-          .filter(msg => msg.content && msg.content.trim())
-          .map(msg => ({
-            role: msg.role === 'user' ? 'user' : 'assistant',
-            content: msg.content
-          }))
-      ];
-
-      // Get AI response with retry logic
-      let aiResponse;
-      const maxRetries = 3;
-      let retryCount = 0;
-      let lastError = null;
-
-      while (retryCount <= maxRetries) {
-        try {
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: messages,
-            max_tokens: 1000,
-            temperature: 0.7
+        if (!agentResponse.success) {
+          console.error('❌ Agent processing failed:', agentResponse.error);
+          await twilioClient.messages.create({
+            from: process.env.TWILIO_WHATSAPP_NUMBER,
+            to: from,
+            body: 'Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo.'
           });
-
-          aiResponse = completion.choices[0].message.content;
-          break;
-        } catch (openaiError) {
-          lastError = openaiError;
-          console.error(`OpenAI API Error (attempt ${retryCount + 1}/${maxRetries + 1}):`, {
-            message: openaiError.message,
-            status: openaiError.status
-          });
-
-          const shouldRetry = openaiError.status === 429 ||
-                             openaiError.status === 500 ||
-                             openaiError.status === 503;
-
-          if (shouldRetry && retryCount < maxRetries) {
-            const delay = 1000 * Math.pow(2, retryCount);
-            console.log(`Retrying in ${delay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            retryCount++;
-          } else {
-            break;
-          }
+          res.status(500).send('AI service error');
+          return;
         }
+
+        // Add user message to history
+        history.push({
+          role: 'user',
+          content: incomingMsg
+        });
+
+        // Add AI response to history
+        history.push({
+          role: 'assistant',
+          content: agentResponse.response
+        });
+
+        // Keep only last 20 messages
+        if (history.length > 20) {
+          history.splice(0, history.length - 20);
+        }
+
+        // Send response
+        await twilioClient.messages.create({
+          from: process.env.TWILIO_WHATSAPP_NUMBER,
+          to: from,
+          body: agentResponse.response
+        });
+
+        console.log(`✅ Response sent to ${from}`);
+
+      } catch (error) {
+        console.error('❌ Error in agent processing:', error);
+        await twilioClient.messages.create({
+          from: process.env.TWILIO_WHATSAPP_NUMBER,
+          to: from,
+          body: 'Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo.'
+        });
       }
-
-      if (!aiResponse) {
-        console.error('All OpenAI API retries failed:', lastError);
-        res.status(500).send('AI service error');
-        return;
-      }
-
-      // Add AI response to history
-      history.push({
-        role: 'assistant',
-        content: aiResponse
-      });
-
-      // Send response
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from,
-        body: aiResponse
-      });
     }
 
     res.status(200).send('OK');

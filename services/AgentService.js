@@ -7,10 +7,10 @@
  */
 
 const OpenAI = require('openai');
+const User = require('../models/User');
 const { tools } = require('../config/tools');
 const {
   MediaFile,
-  User,
   saveMediaFile,
   searchMediaFiles,
   getRecentMedia,
@@ -517,8 +517,33 @@ async function processMessage(options) {
   };
 }
 
+/**
+ * Send a WhatsApp message via Twilio
+ * Utility function for other services
+ */
+async function sendWhatsAppMessage(to, message, twilioClient) {
+  if (!twilioClient) {
+    const twilio = require('twilio');
+    twilioClient = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+  }
+
+  const toNumber = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
+
+  const result = await twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_NUMBER,
+    to: toNumber,
+    body: message
+  });
+
+  return result;
+}
+
 module.exports = {
   processMessage,
   buildSystemPrompt,
-  executeTool
+  executeTool,
+  sendWhatsAppMessage
 };
