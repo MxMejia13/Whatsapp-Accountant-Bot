@@ -143,6 +143,17 @@ const tools = [
         required: ['when', 'description']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_current_time',
+      description: 'Get the current date and time. Use this when user asks "what time is it", "what day is today", "what\'s the date", or when you need current time for calculations (age, days until event, etc.).',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
   }
 ];
 

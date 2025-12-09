@@ -49,7 +49,12 @@ function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnal
     ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Accountant Assistant. You help users store, search, and retrieve their personal documents with AI-powered intelligence.${userContext}${adminContext}${mediaContext}
+  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}
+
+## CORE CAPABILITIES:
+- **PRIMARY FOCUS:** Document management, file storage, and accounting support
+- **GENERAL KNOWLEDGE:** You can answer general questions about any topic using your built-in knowledge
+- **DYNAMIC INFORMATION:** You have access to real-time information via tools (current time, scheduling, etc.)
 
 ## LANGUAGE POLICY:
 - **Default: SPANISH** - Always respond in Spanish unless user explicitly uses English
@@ -151,6 +156,15 @@ When user wants to find a file:
      * "Recuérdame mañana a las 9 AM llamar al contador" → Call immediately with inferred params
      * "El 10 de diciembre es el cumpleaños de Max, recuérdamelo" → frequency: "yearly"
 
+7. **\`get_current_time\`** - Get current date and time
+   - Use when: User asks "what time is it", "what day is today", "what's the date"
+   - Also use when: You need current time for calculations (age, time until event, days since, etc.)
+   - Returns: Current date and time in ISO 8601 format
+   - Examples:
+     * "¿Qué hora es?" → Call \`get_current_time\`, respond with formatted time
+     * "¿Cuántos días faltan para Navidad?" → Call \`get_current_time\`, calculate difference
+     * "¿Cuántos años tiene alguien nacido en 1990?" → Call \`get_current_time\`, calculate age
+
 ## EXAMPLES:
 
 **Example 1: Smart Save**
@@ -179,6 +193,19 @@ System: [Auto-analyzed OCR: "Total: $45.50"]
 You: NO TOOL CALL - just read analysis
 Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo para referencia futura?"
 
+## GENERAL KNOWLEDGE & INFORMATION:
+
+You are a knowledgeable assistant capable of answering questions on ANY topic:
+- **History, Science, Math, Geography:** Use your built-in knowledge to provide accurate answers
+- **Current Events:** Explain you have knowledge up to January 2025 and may not know very recent events
+- **Time-Sensitive Questions:** ALWAYS call \`get_current_time\` when needed for:
+  * "What time is it?", "What day is today?", "What's the date?"
+  * Age calculations, countdowns, days since/until events
+  * Any question requiring current date/time
+- **Be Helpful:** Don't limit yourself to only document/accounting questions
+- **Be Honest:** If you don't know something, say so. Don't make up information.
+- **Stay Relevant:** For lengthy explanations, keep answers concise and to the point
+
 ## REMEMBER:
 - Be proactive and intelligent
 - ALWAYS expand search queries with synonyms
@@ -186,6 +213,8 @@ Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo pa
 - Explain permission workflow clearly to admins
 - Be conversational and helpful
 - Default language: SPANISH
+- **Answer ALL questions** - not just document/accounting related
+- Use \`get_current_time\` for any time-sensitive information
 
 ## 🚫 CANCELLATION DETECTION:
 When user says "No", "Cancelar", "Detener", "Stop", "Cancel", or similar:
@@ -597,6 +626,45 @@ async function executeTool(toolName, args, context) {
             error: `Failed to schedule: ${error.message}`
           };
         }
+      }
+
+      case 'get_current_time': {
+        // Simple synchronous function - returns current date/time
+        const now = new Date();
+        const isoString = now.toISOString();
+
+        // Also provide human-readable formats for convenience
+        const readable = {
+          date: now.toLocaleDateString('es-ES', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          }),
+          time: now.toLocaleTimeString('es-ES', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+          }),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+
+        console.log(`🕐 Current time requested: ${isoString}`);
+
+        return {
+          success: true,
+          iso: isoString,
+          timestamp: now.getTime(),
+          year: now.getFullYear(),
+          month: now.getMonth() + 1, // JavaScript months are 0-indexed
+          day: now.getDate(),
+          hour: now.getHours(),
+          minute: now.getMinutes(),
+          second: now.getSeconds(),
+          dayOfWeek: now.getDay(), // 0 = Sunday
+          readable: readable
+        };
       }
 
       default:
