@@ -113,25 +113,31 @@ const tools = [
     type: 'function',
     function: {
       name: 'schedule_reminder',
-      description: 'Schedule a future WhatsApp reminder. Parses natural language time expressions (e.g., "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM"). Can send to the user or to other people.',
+      description: 'Schedule a WhatsApp reminder (one-time or recurring). Supports natural language time and recurrence patterns. IMPORTANT: Gather ALL info (task, time, frequency) in ONE turn before calling.',
       parameters: {
         type: 'object',
         properties: {
           when: {
             type: 'string',
-            description: 'Natural language time expression in Spanish or English. Examples: "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM", "tomorrow at 9 AM"'
+            description: 'Natural language time expression. Examples: "mañana a las 9 AM", "en 2 horas", "lunes a las 3 PM", "10 de diciembre a las 8 AM", "December 10 at 8 AM"'
           },
           description: {
             type: 'string',
-            description: 'The reminder message to send'
+            description: 'The reminder message to send (what the user should be reminded about)'
           },
           recipients: {
             type: 'array',
             items: {
               type: 'string'
             },
-            description: 'Who should receive the reminder. Can be: "yo"/"me" for the user, or names like "Max", "Vinicio", etc. Default: ["yo"]',
+            description: 'Who receives the reminder. Default: ["yo"] for current user. Can include names like "Max", "Vinicio"',
             default: ['yo']
+          },
+          frequency: {
+            type: 'string',
+            enum: ['once', 'daily', 'weekly', 'monthly', 'yearly'],
+            description: 'Recurrence pattern. "once" = one-time (default). "yearly" = birthdays/anniversaries. "monthly" = monthly bills. "weekly" = weekly meetings. "daily" = daily tasks.',
+            default: 'once'
           }
         },
         required: ['when', 'description']

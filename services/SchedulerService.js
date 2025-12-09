@@ -108,14 +108,15 @@ function defineJobHandlers() {
 }
 
 /**
- * Schedule a reminder
+ * Schedule a reminder (one-time or recurring)
  * @param {Date|string} when - When to send (Date object or ISO string)
  * @param {Array<string>} recipientNames - Names or phone numbers
  * @param {string} description - Reminder message
  * @param {string} requesterPhone - Who scheduled it
+ * @param {string|null} repeatInterval - Agenda repeat format ('1 day', '1 week', '1 month', '1 year') or null for one-time
  * @returns {Promise<Object>} - Job info
  */
-async function scheduleReminder(when, recipientNames, description, requesterPhone) {
+async function scheduleReminder(when, recipientNames, description, requesterPhone, repeatInterval = null) {
   if (!agenda) {
     throw new Error('Scheduler not initialized');
   }
@@ -164,22 +165,44 @@ async function scheduleReminder(when, recipientNames, description, requesterPhon
   // Parse time if it's a string
   const executionTime = typeof when === 'string' ? new Date(when) : when;
 
-  // Validate time is in the future
-  if (executionTime <= new Date()) {
+  // Validate time is in the future (only for non-recurring jobs)
+  if (!repeatInterval && executionTime <= new Date()) {
     return {
       success: false,
       error: 'Execution time must be in the future'
     };
   }
 
-  // Create the job
-  const job = await agenda.schedule(executionTime, 'send_reminder', {
-    description,
-    recipients: recipientPhones,
-    originalRequester: requesterPhone
-  });
+  let job;
 
-  console.log(`📅 Scheduled reminder for ${executionTime.toISOString()}`);
+  // Create the job (one-time or recurring)
+  if (repeatInterval) {
+    // Recurring job
+    job = await agenda.create('send_reminder', {
+      description,
+      recipients: recipientPhones,
+      originalRequester: requesterPhone
+    });
+
+    // Schedule with repetition
+    job.repeatEvery(repeatInterval, {
+      skipImmediate: true // Don't run immediately, wait for scheduled time
+    });
+    job.schedule(executionTime);
+    await job.save();
+
+    console.log(`📅 Scheduled recurring reminder (every ${repeatInterval}) starting at ${executionTime.toISOString()}`);
+  } else {
+    // One-time job
+    job = await agenda.schedule(executionTime, 'send_reminder', {
+      description,
+      recipients: recipientPhones,
+      originalRequester: requesterPhone
+    });
+
+    console.log(`📅 Scheduled one-time reminder for ${executionTime.toISOString()}`);
+  }
+
   console.log(`   Recipients: ${recipientPhones.join(', ')}`);
   console.log(`   Message: ${description}`);
 
@@ -189,7 +212,8 @@ async function scheduleReminder(when, recipientNames, description, requesterPhon
     scheduledFor: executionTime.toISOString(),
     recipientCount: recipientPhones.length,
     recipients: recipientPhones,
-    description
+    description,
+    repeatInterval: repeatInterval
   };
 }
 

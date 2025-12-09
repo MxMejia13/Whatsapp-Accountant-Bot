@@ -134,11 +134,22 @@ When user wants to find a file:
    - Use when: User asks what files they have
    - Parameters: limit, document_type
 
-6. **\`schedule_reminder\`** - Schedule WhatsApp reminders
+6. **\`schedule_reminder\`** - Schedule WhatsApp reminders (one-time or recurring)
    - Use when: User wants to schedule a future message/reminder
-   - Parameters: when (natural language), description, recipients (optional)
-   - Examples: "Recuérdame mañana a las 9 AM llamar al contador", "Program un reminder en 2 horas"
-   - Supports Spanish and English time expressions
+   - Parameters: when, description, recipients (optional), frequency (optional)
+   - **CRITICAL UX RULES:**
+     * **Single-Turn Execution:** Gather ALL info (task, time, frequency) from user's initial message
+     * **No Unnecessary Confirmations:** Don't ask "¿Podrías confirmarme...?" unless info is truly missing
+     * **Infer Frequency Intelligently:**
+       - "cumpleaños", "aniversario", "todos los años" → frequency: "yearly"
+       - "cada mes", "mensualmente" → frequency: "monthly"
+       - "cada semana", "semanalmente" → frequency: "weekly"
+       - "todos los días", "diariamente" → frequency: "daily"
+       - Default → frequency: "once"
+     * **Cancellation Detection:** If user says "No", "Cancelar", "Detener", abort immediately and say: "Entendido, tarea cancelada."
+   - Examples:
+     * "Recuérdame mañana a las 9 AM llamar al contador" → Call immediately with inferred params
+     * "El 10 de diciembre es el cumpleaños de Max, recuérdamelo" → frequency: "yearly"
 
 ## EXAMPLES:
 
@@ -175,6 +186,13 @@ Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo pa
 - Explain permission workflow clearly to admins
 - Be conversational and helpful
 - Default language: SPANISH
+
+## 🚫 CANCELLATION DETECTION:
+When user says "No", "Cancelar", "Detener", "Stop", "Cancel", or similar:
+- **Immediately abort** the current operation
+- **Do NOT call any tools**
+- Respond simply: "Entendido, tarea cancelada." or "Understood, task cancelled."
+- Return to idle state
 
 ## 🎉 NUEVAS CARACTERÍSTICAS V3.0
 
@@ -500,7 +518,7 @@ async function executeTool(toolName, args, context) {
       }
 
       case 'schedule_reminder': {
-        const { when, description, recipients } = args;
+        const { when, description, recipients, frequency } = args;
 
         // Parse natural language time
         const executionTime = parseNaturalTime(when);
@@ -510,16 +528,31 @@ async function executeTool(toolName, args, context) {
           ? recipients
           : ['yo'];
 
-        console.log(`📅 Scheduling reminder for: ${executionTime.toISOString()}`);
+        // Default frequency to 'once'
+        const recurrence = frequency || 'once';
+
+        // Convert frequency to Agenda repeat format
+        const repeatMapping = {
+          'once': null,
+          'daily': '1 day',
+          'weekly': '1 week',
+          'monthly': '1 month',
+          'yearly': '1 year'
+        };
+        const repeatInterval = repeatMapping[recurrence];
+
+        console.log(`📅 Scheduling ${recurrence} reminder for: ${executionTime.toISOString()}`);
         console.log(`   Description: ${description}`);
         console.log(`   Recipients: ${recipientList.join(', ')}`);
+        console.log(`   Recurrence: ${repeatInterval || 'one-time'}`);
 
         try {
           const result = await scheduleReminder(
             executionTime,
             recipientList,
             description,
-            phoneNumber.replace('whatsapp:', '')
+            phoneNumber.replace('whatsapp:', ''),
+            repeatInterval
           );
 
           if (!result.success) {
@@ -539,15 +572,22 @@ async function executeTool(toolName, args, context) {
             minute: '2-digit'
           });
 
+          // Add recurrence info to message
+          const recurrenceText = recurrence !== 'once'
+            ? ` (se repetirá ${recurrence === 'yearly' ? 'anualmente' : recurrence === 'monthly' ? 'mensualmente' : recurrence === 'weekly' ? 'semanalmente' : 'diariamente'})`
+            : '';
+
           return {
             success: true,
             message: `Reminder scheduled successfully`,
             scheduled_for: result.scheduledFor,
-            scheduled_for_readable: timeString,
+            scheduled_for_readable: timeString + recurrenceText,
             recipient_count: result.recipientCount,
             recipients: result.recipients,
             job_id: result.jobId,
-            description: description
+            description: description,
+            frequency: recurrence,
+            repeat_interval: repeatInterval
           };
 
         } catch (error) {
