@@ -1,0 +1,475 @@
+/**
+ * AI Agent Service - Privacy-First Architecture
+ *
+ * This service handles the main AI conversation flow using OpenAI Function Calling.
+ * It allows GPT-4o to intelligently decide when to execute tools (save, search, etc.)
+ * with full privacy awareness and permission control.
+ */
+
+const OpenAI = require('openai');
+const { tools } = require('../config/tools');
+const {
+  MediaFile,
+  saveMediaFile,
+  searchMediaFiles,
+  getRecentMedia,
+  getUserStats,
+  isUserAdmin,
+  verifyFileAccess
+} = require('../database/mongodb');
+const { requestFileAccess } = require('./PermissionService');
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+/**
+ * Build the system prompt with user context
+ */
+function buildSystemPrompt(userTitle, isAdmin, hasMediaAttached, mediaType, mediaAnalysis) {
+  const titleContext = userTitle
+    ? `\n\nYou are speaking with ${userTitle}. Always address them respectfully using this title.`
+    : '';
+
+  const adminContext = isAdmin
+    ? `\n\n🔐 ADMIN PRIVILEGES: You have admin access. You can search ALL files in the system. Files you don't own will show as LOCKED with metadata only. Use \`request_file_access\` to request permission from the owner.`
+    : '';
+
+  const mediaContext = hasMediaAttached && mediaAnalysis
+    ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
+    : '';
+
+  return `You are a Privacy-First Intelligent WhatsApp Accountant Assistant. You help users store, search, and retrieve their personal documents with AI-powered intelligence.${titleContext}${adminContext}${mediaContext}
+
+## LANGUAGE POLICY:
+- **Default: SPANISH** - Always respond in Spanish unless user explicitly uses English
+- **Understanding: ALL languages** - You understand French, German, Portuguese, etc.
+- **Responses: Spanish or English ONLY**
+
+## PRIVACY & SECURITY PRINCIPLES:
+
+### 🔐 DATA SOVEREIGNTY
+- Users can ONLY retrieve files they uploaded OR files shared with them
+- You cannot access files owned by other users without permission
+- ADMINS can search all files but see LOCKED metadata for files they don't own
+- NEVER reveal private information from files you don't have access to
+
+### 🔓 PERMISSION PROTOCOL (Admin Only)
+When admin searches and finds LOCKED files:
+1. File shows: {filename, owner, documentType, status:"LOCKED", fileId}
+2. Ask admin: "¿Quieres solicitar acceso a este archivo?"
+3. If yes: Call \`request_file_access\` with the fileId
+4. System sends WhatsApp to owner: "⚠️ [Admin] requesting access to [filename]. Reply AUTHORIZE or DENY"
+5. When owner authorizes, file is auto-shared and forwarded to admin
+
+## CORE INTELLIGENCE:
+
+### 1. SMART SAVE ("The Tagger")
+When user sends a file:
+- **AUTOMATIC:** System already analyzed it with GPT-4o Vision/Whisper
+- **YOUR JOB:** Decide if user wants to save it
+- **DEFAULT:** YES, save it (unless they're asking a question)
+- **CALL:** \`save_file\` with custom_name ONLY if user specified (e.g., "save as cedula max mejia")
+- **SYSTEM HANDLES:** Keywords with synonyms, OCR, transcription, confidence scoring
+
+Examples:
+- User sends ID card → Call \`save_file\` with no custom_name (system auto-generates)
+- User: "Save this as my passport 2024" → Call \`save_file\` with custom_name="passport 2024"
+- User: "What does this say?" → NO save, just analyze
+
+### 2. SMART SEARCH ("The Expander")
+When user wants to find a file:
+- **CRITICAL:** ALWAYS expand query with synonyms
+- **Examples:**
+  - "mi cedula" → search "cedula id identificacion documento personal dominicana"
+  - "passport" → search "passport pasaporte travel documento viaje international"
+  - "receipt" → search "receipt factura recibo comprobante payment"
+  - "contract" → search "contract contrato agreement acuerdo legal"
+
+**Search Process:**
+1. Expand query internally with synonyms
+2. Call \`search_files\` with expanded query
+3. If results found: Present them clearly
+4. If LOCKED results (admin only): Explain and offer to request access
+5. If no results: Suggest broader search terms
+
+### 3. PROACTIVE BEHAVIOR
+- **Files sent:** Assume save intent unless asking question
+- **Search requests:** Be smart about synonyms
+- **Ambiguous requests:** Ask for clarification
+- **Admin locked files:** Explain permission workflow
+
+## AVAILABLE TOOLS:
+
+1. **\`save_file\`** - Save media with AI-generated metadata
+   - Use when: User sends file and wants to store it
+   - Parameters: custom_name (optional, only if user specified)
+   - System handles: Keywords, OCR, transcription, confidence
+
+2. **\`search_files\`** - Smart search with synonym expansion
+   - Use when: User wants to find/retrieve a file
+   - Parameters: query (WITH SYNONYMS), document_type, limit
+   - Returns: User's files OR shared files (admin sees LOCKED for others)
+
+3. **\`request_file_access\`** - Request permission to locked file (ADMIN ONLY)
+   - Use when: Admin wants access to LOCKED file
+   - Parameters: file_id (from search results)
+   - Triggers: Permission handshake workflow
+
+4. **\`get_my_stats\`** - File storage statistics
+   - Use when: User asks about their files/storage
+   - Returns: Total files, breakdown by type
+
+5. **\`list_recent_files\`** - Recent files list
+   - Use when: User asks what files they have
+   - Parameters: limit, document_type
+
+## EXAMPLES:
+
+**Example 1: Smart Save**
+User: [sends image of Dominican ID]
+System: [Auto-analyzed: "Dominican ID card, keywords: cedula id identificacion..."]
+You: Call \`save_file\` (no custom_name)
+Response: "✅ Cédula guardada, ${userTitle}! Generé palabras clave inteligentes para búsqueda rápida."
+
+**Example 2: Smart Search**
+User: "Enviame mi cedula"
+You: Call \`search_files\` with query "cedula id identificacion documento personal dominicana"
+Response: [If found] "📎 Aquí está tu cédula, ${userTitle}!"
+
+**Example 3: Admin Locked File**
+User (admin): "Busca el pasaporte de Jose"
+You: Call \`search_files\` with query "pasaporte passport jose travel documento"
+Results: [{status:"LOCKED", filename:"passport-jose.jpg", owner:"Sr. Jose", fileId:"..."}]
+Response: "Encontré el pasaporte de Sr. Jose, pero está LOCKED (es su archivo privado). ¿Quieres que solicite permiso de acceso?"
+User: "Si"
+You: Call \`request_file_access\` with file_id
+Response: "✅ Solicitud enviada a Sr. Jose. Recibirás el archivo cuando autorice."
+
+**Example 4: Just Analyzing**
+User: [sends receipt] "Cuanto pagué aquí?"
+System: [Auto-analyzed OCR: "Total: $45.50"]
+You: NO TOOL CALL - just read analysis
+Response: "Según el recibo, pagaste $45.50. ¿Quieres que guarde este recibo para referencia futura?"
+
+## REMEMBER:
+- Be proactive and intelligent
+- ALWAYS expand search queries with synonyms
+- Respect privacy boundaries
+- Explain permission workflow clearly to admins
+- Be conversational and helpful
+- Default language: SPANISH`;
+}
+
+/**
+ * Execute a tool call - Privacy-Aware Edition
+ */
+async function executeTool(toolName, args, context) {
+  const { phoneNumber, userTitle, isAdmin, mediaAnalysis } = context;
+
+  console.log(`🔧 Executing tool: ${toolName} with args:`, JSON.stringify(args, null, 2));
+
+  try {
+    switch (toolName) {
+      case 'save_file': {
+        if (!mediaAnalysis) {
+          return {
+            success: false,
+            error: 'No media analysis available. User must send a file first.'
+          };
+        }
+
+        const { custom_name } = args;
+
+        // Use custom name if provided, otherwise use AI-generated filename
+        const filename = custom_name || mediaAnalysis.filename;
+
+        // Save to MongoDB with full metadata
+        const savedFile = await saveMediaFile({
+          ownerPhoneNumber: phoneNumber,
+          ownerTitle: userTitle,
+          url: mediaAnalysis.url, // S3/R2 URL
+          s3Key: mediaAnalysis.s3Key,
+          filename: filename,
+          description: mediaAnalysis.description,
+          keywords: mediaAnalysis.keywords,
+          detectedText: mediaAnalysis.detectedText,
+          documentType: mediaAnalysis.documentType,
+          confidence: mediaAnalysis.confidence,
+          originalName: mediaAnalysis.originalName,
+          mimeType: mediaAnalysis.mimeType,
+          fileSize: mediaAnalysis.fileSize,
+          isForwarded: mediaAnalysis.isForwarded || false
+        });
+
+        console.log(`✅ File saved to MongoDB: ${savedFile._id}`);
+
+        return {
+          success: true,
+          message: 'File saved successfully with AI-generated keywords',
+          file_id: savedFile._id,
+          filename: savedFile.filename,
+          keywords: savedFile.keywords,
+          document_type: savedFile.documentType,
+          confidence: savedFile.confidence
+        };
+      }
+
+      case 'search_files': {
+        const { query, document_type, limit } = args;
+
+        // Perform privacy-aware search
+        const results = await searchMediaFiles(
+          phoneNumber,
+          query,
+          isAdmin,
+          limit || 5
+        );
+
+        // Filter by document type if specified
+        let filtered = results;
+        if (document_type && document_type !== 'all') {
+          filtered = results.filter(f => f.documentType === document_type);
+        }
+
+        return {
+          success: true,
+          results: filtered.map(file => {
+            // If LOCKED (admin only), return limited metadata
+            if (file.status === 'LOCKED') {
+              return {
+                file_id: file._id,
+                filename: file.filename,
+                owner: file.owner,
+                document_type: file.documentType,
+                created_at: file.createdAt,
+                status: 'LOCKED',
+                message: file.message
+              };
+            }
+
+            // Full access - return complete metadata
+            return {
+              file_id: file._id,
+              filename: file.filename,
+              description: file.description,
+              keywords: file.keywords,
+              document_type: file.documentType,
+              created_at: file.createdAt,
+              url: file.url,
+              owner: file.ownerTitle || file.ownerPhoneNumber
+            };
+          }),
+          count: filtered.length,
+          query: query
+        };
+      }
+
+      case 'request_file_access': {
+        const { file_id } = args;
+
+        // Check if user is admin
+        if (!isAdmin) {
+          return {
+            success: false,
+            error: 'Only administrators can request file access'
+          };
+        }
+
+        // Request access via PermissionService
+        const result = await requestFileAccess(
+          file_id,
+          phoneNumber,
+          userTitle
+        );
+
+        return result;
+      }
+
+      case 'get_my_stats': {
+        const { include_breakdown } = args;
+
+        const stats = await getUserStats(phoneNumber);
+
+        if (!stats) {
+          return {
+            success: false,
+            error: 'User stats not found'
+          };
+        }
+
+        return {
+          success: true,
+          stats: {
+            total_files: stats.totalFiles,
+            total_messages: stats.totalMessages,
+            breakdown: include_breakdown ? stats.breakdown : null
+          }
+        };
+      }
+
+      case 'list_recent_files': {
+        const { limit, document_type } = args;
+
+        // Get recent files (privacy-enforced - only owner's files)
+        let query = { ownerPhoneNumber: phoneNumber };
+        if (document_type && document_type !== 'all') {
+          query.documentType = document_type;
+        }
+
+        const files = await MediaFile.find(query)
+          .sort({ createdAt: -1 })
+          .limit(limit || 10)
+          .lean();
+
+        return {
+          success: true,
+          files: files.map(file => ({
+            file_id: file._id,
+            filename: file.filename,
+            description: file.description,
+            document_type: file.documentType,
+            created_at: file.createdAt
+          })),
+          count: files.length
+        };
+      }
+
+      default:
+        return {
+          success: false,
+          error: `Unknown tool: ${toolName}`
+        };
+    }
+  } catch (error) {
+    console.error(`Error executing tool ${toolName}:`, error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Process a message through the AI Agent
+ * This is the main entry point that handles the tool calling loop
+ */
+async function processMessage(options) {
+  const {
+    userMessage,
+    conversationHistory,
+    userTitle,
+    phoneNumber,
+    isAdmin,
+    hasMediaAttached,
+    mediaType,
+    mediaAnalysis
+  } = options;
+
+  const systemPrompt = buildSystemPrompt(
+    userTitle,
+    isAdmin,
+    hasMediaAttached,
+    mediaType,
+    mediaAnalysis
+  );
+
+  // Build messages array for OpenAI
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory
+      .filter(msg => msg.content && msg.content.trim())
+      .map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
+  ];
+
+  // Add current user message
+  messages.push({
+    role: 'user',
+    content: userMessage || '(user sent media without text message)'
+  });
+
+  console.log(`🤖 Agent processing message from ${phoneNumber}`);
+  console.log(`   Admin: ${isAdmin}, Media: ${hasMediaAttached}, Type: ${mediaType}`);
+  console.log(`   Message: "${userMessage?.substring(0, 100)}..."`);
+
+  // Tool calling loop
+  let currentMessages = [...messages];
+  let iteration = 0;
+  const MAX_ITERATIONS = 5; // Prevent infinite loops
+
+  while (iteration < MAX_ITERATIONS) {
+    iteration++;
+    console.log(`   Iteration ${iteration}: Calling GPT-4o...`);
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: currentMessages,
+      tools: tools,
+      tool_choice: 'auto', // Let GPT decide when to use tools
+      temperature: 0.7,
+      max_tokens: 1000
+    });
+
+    const assistantMessage = response.choices[0].message;
+    console.log(`   GPT response: ${assistantMessage.content?.substring(0, 100) || '(tool call)'}`);
+
+    // Add assistant's response to conversation
+    currentMessages.push(assistantMessage);
+
+    // Check if GPT wants to call a tool
+    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+      console.log(`   🔧 GPT wants to call ${assistantMessage.tool_calls.length} tool(s)`);
+
+      // Execute each tool call
+      for (const toolCall of assistantMessage.tool_calls) {
+        const toolName = toolCall.function.name;
+        const toolArgs = JSON.parse(toolCall.function.arguments);
+
+        // Execute the tool
+        const toolResult = await executeTool(toolName, toolArgs, {
+          phoneNumber,
+          userTitle,
+          isAdmin,
+          mediaAnalysis
+        });
+
+        console.log(`   ✅ Tool ${toolName} result:`, JSON.stringify(toolResult, null, 2));
+
+        // Add tool result to conversation
+        currentMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(toolResult)
+        });
+      }
+
+      // Continue loop to get GPT's final response
+      continue;
+    }
+
+    // No tool calls, we have the final response
+    console.log(`   ✅ Final response ready`);
+    return {
+      success: true,
+      response: assistantMessage.content,
+      toolsCalled: iteration > 1 // Did we call any tools?
+    };
+  }
+
+  // Max iterations reached
+  console.warn(`   ⚠️  Max iterations (${MAX_ITERATIONS}) reached`);
+  return {
+    success: true,
+    response: 'Lo siento, estoy teniendo problemas procesando tu solicitud. ¿Podrías reformularla?',
+    error: 'Max iterations reached'
+  };
+}
+
+module.exports = {
+  processMessage,
+  buildSystemPrompt,
+  executeTool
+};
