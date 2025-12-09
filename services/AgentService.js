@@ -877,24 +877,30 @@ async function executeTool(toolName, args, context) {
           // If not a valid email format, treat as user alias and lookup
           if (!isValidEmail) {
             console.log(`🔍 "${recipientInput}" is not a valid email format - treating as user alias`);
-            console.log(`   Performing unified database search (alias, fullName, name)...`);
+            console.log(`   Performing unified database search (alias, fullName, name) with email validation...`);
 
             // ===============================================
             // UNIFIED CASE-INSENSITIVE SEARCH (Single Query)
             // ===============================================
             // Search all three fields simultaneously using $or
-            // This is more robust and efficient than sequential queries
+            // CRITICAL: Only return users with valid email addresses
+            // This prevents finding placeholder/incomplete user profiles
             const searchPattern = new RegExp(`^${recipientInput.trim()}$`, 'i');
 
             const user = await User.findOne({
-              $or: [
-                { alias: { $regex: searchPattern } },
-                { fullName: { $regex: searchPattern } },
-                { name: { $regex: searchPattern } }
+              $and: [
+                {
+                  $or: [
+                    { alias: { $regex: searchPattern } },
+                    { fullName: { $regex: searchPattern } },
+                    { name: { $regex: searchPattern } }
+                  ]
+                },
+                { email: { $exists: true, $ne: null, $ne: '' } }
               ]
             });
 
-            console.log(`   Query executed: $or[alias, fullName, name] with case-insensitive regex`);
+            console.log(`   Query executed: $or[alias, fullName, name] + email validation (must exist and not be empty)`);
 
             // Check if user was found and has email
             if (user) {
