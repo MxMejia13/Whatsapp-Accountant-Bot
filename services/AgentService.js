@@ -990,6 +990,8 @@ async function executeTool(toolName, args, context) {
             },
             // Force IPv4 to prevent IPv6/IPv4 protocol conflicts
             family: 4,
+            // Use connection pooling to resolve sporadic timeouts
+            pool: true,
             // Enhanced connection settings to fix ETIMEDOUT
             connectionTimeout: 10000, // 10 seconds
             greetingTimeout: 10000,
@@ -1003,6 +1005,12 @@ async function executeTool(toolName, args, context) {
               minVersion: 'TLSv1.2' // Use modern TLS (Resend compatible)
             };
             transportConfig.requireTLS = true; // Force STARTTLS upgrade
+          } else {
+            // Port 465: Direct SSL/TLS - still allow self-signed certs
+            transportConfig.tls = {
+              rejectUnauthorized: false,
+              minVersion: 'TLSv1.2'
+            };
           }
 
           console.log(`📧 Configuring SMTP: ${transportConfig.host}:${transportConfig.port} (secure: ${transportConfig.secure})`);
