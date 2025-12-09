@@ -790,6 +790,74 @@ async function executeTool(toolName, args, context) {
         }
       }
 
+      case 'send_email': {
+        // Send email with optional file attachment
+        const { recipientEmail, subject, body, s3Key } = args;
+
+        if (!recipientEmail || !subject || !body) {
+          return {
+            success: false,
+            error: 'recipientEmail, subject, and body are required'
+          };
+        }
+
+        try {
+          const nodemailer = require('nodemailer');
+          const { getSignedUrl } = require('./CloudStorage');
+
+          // Configure SMTP transporter
+          const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST || 'smtp.gmail.com',
+            port: parseInt(process.env.SMTP_PORT) || 587,
+            secure: false, // Use TLS
+            auth: {
+              user: process.env.SMTP_USER || process.env.SMTP_EMAIL,
+              pass: process.env.SMTP_PASS
+            }
+          });
+
+          // Prepare email options
+          const mailOptions = {
+            from: process.env.SMTP_FROM || process.env.SMTP_EMAIL,
+            to: recipientEmail,
+            subject: subject,
+            text: body,
+            html: body.replace(/\n/g, '<br>')
+          };
+
+          // If s3Key provided, generate pre-signed URL and add to email
+          if (s3Key) {
+            try {
+              const downloadUrl = await getSignedUrl(s3Key, 604800); // 7 days expiration
+              mailOptions.text += `\n\n📎 Archivo adjunto:\n${downloadUrl}`;
+              mailOptions.html += `<br><br>📎 <a href="${downloadUrl}">Descargar archivo adjunto</a>`;
+              console.log(`📧 Added attachment download link (7-day expiration)`);
+            } catch (urlError) {
+              console.error(`⚠️  Failed to generate download URL:`, urlError.message);
+              // Continue without attachment
+            }
+          }
+
+          // Send email
+          const info = await transporter.sendMail(mailOptions);
+          console.log(`✅ Email sent successfully to ${recipientEmail}`);
+          console.log(`   Message ID: ${info.messageId}`);
+
+          return {
+            success: true,
+            message: `Email sent successfully to ${recipientEmail}`,
+            messageId: info.messageId,
+            attachmentIncluded: !!s3Key
+          };
+        } catch (error) {
+          console.error('Error sending email:', error);
+          return {
+            success: false,
+            error: `Error sending email: ${error.message}`
+          };
+        }
+      }
+
       default:
         return {
           success: false,

@@ -199,6 +199,35 @@ const tools = [
         required: ['filename']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_email',
+      description: 'Send email with optional file attachment. If s3Key is provided, generates a secure 7-day pre-signed download URL for R2 files and includes it in the email. Use this when user asks to email a document or send information via email.',
+      parameters: {
+        type: 'object',
+        properties: {
+          recipientEmail: {
+            type: 'string',
+            description: 'Recipient email address (e.g., "user@example.com")'
+          },
+          subject: {
+            type: 'string',
+            description: 'Email subject line'
+          },
+          body: {
+            type: 'string',
+            description: 'Email body text (supports newlines for formatting)'
+          },
+          s3Key: {
+            type: 'string',
+            description: 'Optional: R2 storage key for file attachment (e.g., "media/18091234567/1733766789123-abc123.pdf"). If provided, a secure download link will be generated and included in the email.'
+          }
+        },
+        required: ['recipientEmail', 'subject', 'body']
+      }
+    }
   }
 ];
 
