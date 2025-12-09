@@ -3,12 +3,14 @@
  *
  * Intelligent media handling that runs BEFORE the main Agent
  * Implements:
+ * - Twilio-Authenticated Media Download
  * - Audio Heuristic (Direct voice vs Forwarded audio)
  * - Vision Analysis (OCR, document type detection)
  * - Smart Save (Auto-save if confident, ask if unsure)
  * - BULLETPROOF R2 Upload Pipeline with Comprehensive Validation
  */
 
+const axios = require('axios');
 const OpenAI = require('openai');
 const { uploadFile } = require('./CloudStorage');
 const { saveMediaFile, PendingConfirmation } = require('../database/mongodb');
@@ -17,32 +19,133 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// Twilio credentials for authenticated media downloads
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+
 // Confidence threshold for auto-save (0-100%)
 const AUTO_SAVE_CONFIDENCE = 80;
+
+/**
+ * Download media from Twilio with proper authentication
+ * Twilio requires Basic Auth to access protected media files
+ *
+ * @param {string} mediaUrl - The Twilio media URL from the webhook
+ * @returns {Promise<Buffer>} - The downloaded media as a Buffer
+ */
+async function downloadMediaFromTwilio(mediaUrl) {
+  try {
+    if (!mediaUrl || typeof mediaUrl !== 'string') {
+      throw new Error('Invalid mediaUrl provided');
+    }
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+      throw new Error('Missing Twilio credentials (TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN)');
+    }
+
+    console.log(`📥 Downloading media from Twilio...`);
+    console.log(`   URL: ${mediaUrl.substring(0, 60)}...`);
+
+    // Create Basic Auth header: Base64(ACCOUNT_SID:AUTH_TOKEN)
+    const authString = `${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`;
+    const base64Auth = Buffer.from(authString).toString('base64');
+
+    // Download with authentication
+    const response = await axios.get(mediaUrl, {
+      headers: {
+        'Authorization': `Basic ${base64Auth}`
+      },
+      responseType: 'arraybuffer',
+      timeout: 30000, // 30 second timeout
+      maxContentLength: 50 * 1024 * 1024, // 50MB max
+      validateStatus: (status) => status === 200 // Only accept 200 OK
+    });
+
+    // Validate response
+    if (!response.data) {
+      throw new Error('Twilio returned empty response');
+    }
+
+    const mediaBuffer = Buffer.from(response.data);
+
+    if (mediaBuffer.length === 0) {
+      throw new Error('Downloaded media is empty (0 bytes)');
+    }
+
+    console.log(`   ✅ Download complete: ${mediaBuffer.length} bytes`);
+
+    return mediaBuffer;
+
+  } catch (error) {
+    console.error('❌ downloadMediaFromTwilio: Error:', error.message);
+
+    if (error.response) {
+      console.error(`   HTTP Status: ${error.response.status}`);
+      console.error(`   HTTP Status Text: ${error.response.statusText}`);
+
+      if (error.response.status === 401 || error.response.status === 403) {
+        throw new Error('Twilio authentication failed - check ACCOUNT_SID and AUTH_TOKEN');
+      }
+    }
+
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Download timeout - media file too large or network issue');
+    }
+
+    throw new Error(`Failed to download media from Twilio: ${error.message}`);
+  }
+}
 
 /**
  * Process media BEFORE passing to main Agent
  * Returns processed result with instructions for Agent
  *
  * CRITICAL PIPELINE:
- * 1. Validate media buffer (done by caller - index.js downloads from Twilio)
+ * 0. Download media from Twilio (if mediaUrl provided instead of mediaBuffer)
+ * 1. Validate media buffer
  * 2. Analyze media (Vision API or Whisper)
  * 3. Upload to R2 Storage (VALIDATE SUCCESS)
  * 4. Save metadata to MongoDB (ONLY if R2 upload succeeded)
  * 5. Return result with ALL required fields or ERROR
  */
 async function processMedia(options) {
-  const {
+  let {
     mediaBuffer,
+    mediaUrl,
     mimeType,
     originalName,
     userId,
+    ownerPhoneNumber, // Alternative to userId
     userTitle,
+    ownerTitle, // Alternative to userTitle
     userMessage,
     isForwarded
   } = options;
 
+  // Handle parameter aliases
+  userId = userId || ownerPhoneNumber;
+  userTitle = userTitle || ownerTitle;
+
   try {
+    // =========================================================================
+    // STEP 0: DOWNLOAD FROM TWILIO IF NEEDED
+    // =========================================================================
+
+    if (!mediaBuffer && mediaUrl) {
+      console.log(`🔄 No buffer provided - downloading from Twilio...`);
+
+      try {
+        mediaBuffer = await downloadMediaFromTwilio(mediaUrl);
+      } catch (downloadError) {
+        console.error('❌ MediaProcessor: Download failed:', downloadError.message);
+        return {
+          action: 'ERROR',
+          error: `Download failed: ${downloadError.message}`,
+          message: 'Lo siento, no pude descargar el archivo multimedia de WhatsApp. Por favor, intenta enviarlo de nuevo.'
+        };
+      }
+    }
+
     // =========================================================================
     // CRITICAL INPUT VALIDATION - PREVENT ALL CRASHES
     // =========================================================================
@@ -51,6 +154,7 @@ async function processMedia(options) {
       console.error('❌ MediaProcessor: Invalid media buffer');
       console.error('   mediaBuffer exists:', !!mediaBuffer);
       console.error('   is Buffer:', Buffer.isBuffer(mediaBuffer));
+      console.error('   mediaUrl provided:', !!mediaUrl);
       return {
         action: 'ERROR',
         error: 'Invalid media buffer',
