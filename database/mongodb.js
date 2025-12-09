@@ -482,6 +482,72 @@ async function clearConversationHistory(phoneNumber) {
   await ConversationHistory.deleteMany({ phoneNumber: cleanPhone });
 }
 
+/**
+ * Resolve a user's name/alias to their phone number
+ * Used by scheduler to convert recipient names to phone numbers
+ * @param {string} name - User's alias, full name, or email
+ * @returns {Promise<string|null>} - Phone number or null if not found
+ */
+async function resolveNameToPhone(name) {
+  if (!name || typeof name !== 'string') {
+    return null;
+  }
+
+  const nameLower = name.toLowerCase().trim();
+
+  // Try to find by alias
+  let user = await User.findOne({
+    alias: { $regex: new RegExp(`^${nameLower}$`, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  // Try to find by full name
+  user = await User.findOne({
+    fullName: { $regex: new RegExp(nameLower, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  // Try to find by email
+  user = await User.findOne({
+    email: { $regex: new RegExp(`^${nameLower}$`, 'i') }
+  }).lean();
+
+  if (user) {
+    return user.phoneNumber;
+  }
+
+  return null;
+}
+
+/**
+ * Get user's display name (alias or full name)
+ * @param {string} phoneNumber - User's phone number
+ * @returns {Promise<string>} - Display name or phone number
+ */
+async function getUserDisplayName(phoneNumber) {
+  if (!phoneNumber) {
+    return 'Unknown';
+  }
+
+  const cleanPhone = phoneNumber.replace('whatsapp:', '').replace('+', '');
+
+  const user = await User.findOne({
+    phoneNumber: { $regex: new RegExp(cleanPhone) }
+  }).lean();
+
+  if (user) {
+    return user.alias || user.fullName || user.phoneNumber;
+  }
+
+  return phoneNumber;
+}
+
 module.exports = {
   connectMongoDB,
   MediaFile,
@@ -502,5 +568,7 @@ module.exports = {
   updateAccessRequestStatus,
   saveMessageToHistory,
   getConversationHistory,
-  clearConversationHistory
+  clearConversationHistory,
+  resolveNameToPhone,
+  getUserDisplayName
 };
