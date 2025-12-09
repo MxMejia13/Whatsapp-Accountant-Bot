@@ -462,27 +462,43 @@ async function processImage(options) {
           content: [
             {
               type: 'text',
-              text: `Analyze this image in detail. You are a document analysis AI.
+              text: `Analyze this image in detail. You are a document analysis AI with OCR and data extraction capabilities.
 
 TASK:
 1. Identify the document type (passport, ID card, receipt, invoice, contract, photo, etc.)
-2. Extract ALL visible text (OCR)
+2. Extract ALL visible text (OCR) - capture EVERYTHING readable
 3. Generate a descriptive filename (3-5 words, lowercase, hyphens only)
 4. Generate 5-10 search keywords
 5. Write a brief description
 6. Rate your confidence (0-100%) about what this document is
+7. **EXTRACT STRUCTURED DATA** (for receipts, invoices, bills):
+   - documentDate: Date on the document (ISO 8601 format: YYYY-MM-DD)
+   - vendorName: Business/merchant name
+   - amount: Total amount (number only, no currency symbols)
+   - currency: Currency code (USD, DOP, EUR, etc.)
+   - fullOcrText: Complete raw text exactly as it appears
 
 FORMAT YOUR RESPONSE AS JSON:
 {
-  "documentType": "passport" | "id_card" | "receipt" | "invoice" | "contract" | "photo" | "screenshot" | "other",
-  "filename": "passport-usa-john-doe",
-  "description": "US Passport for John Doe, issued 2020",
-  "keywords": ["passport", "travel", "id", "usa", "john doe"],
-  "detectedText": "FULL TEXT EXTRACTED FROM IMAGE...",
-  "confidence": 95
+  "documentType": "passport" | "id_card" | "receipt" | "invoice" | "contract" | "bill" | "photo" | "screenshot" | "other",
+  "filename": "receipt-walmart-2024-12-09",
+  "description": "Walmart receipt for grocery purchase, total $45.67",
+  "keywords": ["receipt", "walmart", "grocery", "purchase", "food"],
+  "detectedText": "Summary of main content...",
+  "confidence": 95,
+  "documentDate": "2024-12-09",
+  "vendorName": "Walmart",
+  "amount": 45.67,
+  "currency": "USD",
+  "fullOcrText": "WALMART\\nStore #1234\\nDate: 12/09/2024\\nTime: 14:30\\nItem 1: $10.00\\nItem 2: $35.67\\nTotal: $45.67\\nThank you!"
 }
 
-BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card with high confidence.`
+IMPORTANT:
+- For receipts/invoices: ALWAYS extract documentDate, vendorName, amount, currency, and fullOcrText
+- For other documents: Set these fields to null if not applicable
+- detectedText: Brief summary of content
+- fullOcrText: Complete verbatim text from image
+- BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card with high confidence.`
             },
             {
               type: 'image_url',
@@ -512,6 +528,28 @@ BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card w
       analysis.detectedText = analysis.detectedText || '';
       analysis.description = analysis.description || '';
       analysis.confidence = analysis.confidence || 50;
+
+      // OCR data extraction fields (may be null for non-financial documents)
+      analysis.documentDate = analysis.documentDate || null;
+      analysis.vendorName = analysis.vendorName || null;
+      analysis.amount = analysis.amount || null;
+      analysis.currency = analysis.currency || null;
+      analysis.fullOcrText = analysis.fullOcrText || null;
+
+      // Parse documentDate to Date object if provided
+      if (analysis.documentDate && typeof analysis.documentDate === 'string') {
+        try {
+          analysis.documentDate = new Date(analysis.documentDate);
+          // Validate it's a valid date
+          if (isNaN(analysis.documentDate.getTime())) {
+            console.warn('⚠️  Invalid documentDate, setting to null');
+            analysis.documentDate = null;
+          }
+        } catch (dateError) {
+          console.warn('⚠️  Error parsing documentDate:', dateError.message);
+          analysis.documentDate = null;
+        }
+      }
 
     } catch (visionError) {
       console.error('❌ processImage: Vision API error:', visionError);
@@ -858,7 +896,14 @@ async function saveImageFile(data) {
       originalName: originalName || 'image.jpg',
       mimeType,                       // ← REQUIRED
       fileSize: uploadResult.size,
-      isForwarded: isForwarded || false
+      isForwarded: isForwarded || false,
+
+      // OCR Data Extraction (for receipts, invoices, bills)
+      documentDate: analysis.documentDate || null,
+      vendorName: analysis.vendorName || null,
+      amount: analysis.amount || null,
+      currency: analysis.currency || 'USD',
+      fullOcrText: analysis.fullOcrText || null
     });
 
     console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);

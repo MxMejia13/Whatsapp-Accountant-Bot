@@ -52,6 +52,13 @@ const MediaFileSchema = new Schema({
   documentType: { type: String }, // "passport", "receipt", "contract", "id_card", etc.
   confidence: { type: Number, min: 0, max: 100 }, // AI confidence level (0-100%)
 
+  // DOCUMENT DATA EXTRACTION (from OCR/Vision Analysis)
+  documentDate: { type: Date, index: true }, // Date on document (receipt date, invoice date, etc.)
+  vendorName: { type: String, trim: true, index: true }, // Vendor/merchant name (for receipts, invoices)
+  amount: { type: Number, index: true }, // Total amount (for receipts, invoices, bills)
+  currency: { type: String, default: 'USD' }, // Currency code (USD, DOP, EUR, etc.)
+  fullOcrText: { type: String }, // Complete raw OCR text before processing
+
   // FILE METADATA
   originalName: { type: String }, // Original filename from WhatsApp
   mimeType: { type: String, required: true },
@@ -72,14 +79,18 @@ MediaFileSchema.index({
   keywords: 'text',
   detectedText: 'text',
   filename: 'text',
-  documentType: 'text'
+  documentType: 'text',
+  vendorName: 'text',
+  fullOcrText: 'text'
 }, {
   weights: {
     documentType: 10, // Highest priority
     filename: 8,
+    vendorName: 7, // Vendor name important for searching
     keywords: 5,
     description: 3,
-    detectedText: 1
+    detectedText: 1,
+    fullOcrText: 1
   }
 });
 
