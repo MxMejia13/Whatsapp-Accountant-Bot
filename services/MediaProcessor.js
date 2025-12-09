@@ -126,6 +126,16 @@ async function processMedia(options) {
   userId = userId || ownerPhoneNumber;
   userTitle = userTitle || ownerTitle;
 
+  // CRITICAL: Validate userId is set (required for all operations)
+  console.log(`🔍 processMedia called with:`);
+  console.log(`   userId: ${userId} (${typeof userId})`);
+  console.log(`   ownerPhoneNumber: ${ownerPhoneNumber} (${typeof ownerPhoneNumber})`);
+  console.log(`   userTitle: ${userTitle} (${typeof userTitle})`);
+  console.log(`   ownerTitle: ${ownerTitle} (${typeof ownerTitle})`);
+  console.log(`   mimeType: ${mimeType}`);
+  console.log(`   mediaUrl: ${mediaUrl ? 'provided' : 'not provided'}`);
+  console.log(`   mediaBuffer: ${mediaBuffer ? 'provided' : 'not provided'}`);
+
   try {
     // =========================================================================
     // STEP 0: DOWNLOAD FROM TWILIO IF NEEDED
@@ -695,6 +705,33 @@ async function saveAudioFile(data) {
     // =========================================================================
 
     console.log(`   [2/2] Saving to MongoDB...`);
+
+    // CRITICAL: Log all values being passed to MongoDB to diagnose undefined issues
+    console.log(`   📊 Validation before MongoDB save:`);
+    console.log(`      ownerPhoneNumber: ${userId} (${typeof userId})`);
+    console.log(`      ownerTitle: ${userTitle} (${typeof userTitle})`);
+    console.log(`      url: ${uploadResult.url} (${typeof uploadResult.url})`);
+    console.log(`      s3Key: ${uploadResult.key} (${typeof uploadResult.key})`);
+    console.log(`      filename: ${filenameSuggestion} (${typeof filenameSuggestion})`);
+    console.log(`      mimeType: ${mimeType} (${typeof mimeType})`);
+
+    // Validate all REQUIRED fields before calling saveMediaFile
+    if (!userId) {
+      throw new Error('Cannot save to MongoDB: userId is undefined or empty');
+    }
+    if (!uploadResult.url) {
+      throw new Error('Cannot save to MongoDB: uploadResult.url is undefined or empty');
+    }
+    if (!uploadResult.key) {
+      throw new Error('Cannot save to MongoDB: uploadResult.key is undefined or empty');
+    }
+    if (!filenameSuggestion) {
+      throw new Error('Cannot save to MongoDB: filenameSuggestion is undefined or empty');
+    }
+    if (!mimeType) {
+      throw new Error('Cannot save to MongoDB: mimeType is undefined or empty');
+    }
+
     const mediaFile = await saveMediaFile({
       ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
       ownerTitle: userTitle,
@@ -780,6 +817,33 @@ async function saveImageFile(data) {
     // =========================================================================
 
     console.log(`   [2/2] Saving to MongoDB...`);
+
+    // CRITICAL: Log all values being passed to MongoDB to diagnose undefined issues
+    console.log(`   📊 Validation before MongoDB save:`);
+    console.log(`      ownerPhoneNumber: ${userId} (${typeof userId})`);
+    console.log(`      ownerTitle: ${userTitle} (${typeof userTitle})`);
+    console.log(`      url: ${uploadResult.url} (${typeof uploadResult.url})`);
+    console.log(`      s3Key: ${uploadResult.key} (${typeof uploadResult.key})`);
+    console.log(`      filename: ${analysis.filename} (${typeof analysis.filename})`);
+    console.log(`      mimeType: ${mimeType} (${typeof mimeType})`);
+
+    // Validate all REQUIRED fields before calling saveMediaFile
+    if (!userId) {
+      throw new Error('Cannot save to MongoDB: userId is undefined or empty');
+    }
+    if (!uploadResult.url) {
+      throw new Error('Cannot save to MongoDB: uploadResult.url is undefined or empty');
+    }
+    if (!uploadResult.key) {
+      throw new Error('Cannot save to MongoDB: uploadResult.key is undefined or empty');
+    }
+    if (!analysis.filename) {
+      throw new Error('Cannot save to MongoDB: analysis.filename is undefined or empty');
+    }
+    if (!mimeType) {
+      throw new Error('Cannot save to MongoDB: mimeType is undefined or empty');
+    }
+
     const mediaFile = await saveMediaFile({
       ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
       ownerTitle: userTitle,
