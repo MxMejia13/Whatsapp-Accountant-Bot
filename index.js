@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const twilio = require('twilio');
 const OpenAI = require('openai');
-const { connectMongoDB, getOrCreateUser, saveMediaFile, User } = require('./database/mongodb');
+const { connectMongoDB, getOrCreateUser, saveMediaFile, User, saveMessageToHistory, getConversationHistory } = require('./database/mongodb');
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
 const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
 const { initScheduler } = require('./services/SchedulerService');
@@ -25,9 +25,6 @@ const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
-
-// Store conversation context (in production, use MongoDB)
-const conversationHistory = new Map();
 
 // ============================================================================
 // SYSTEM DIAGNOSTICS
@@ -220,13 +217,10 @@ app.post('/webhook', async (req, res) => {
 
     // Handle text messages with AI using AgentService
     if (incomingMsg && incomingMsg.trim()) {
-      // Get or initialize conversation history
-      if (!conversationHistory.has(from)) {
-        conversationHistory.set(from, []);
-      }
-      const history = conversationHistory.get(from);
-
       try {
+        // Retrieve conversation history from MongoDB
+        const history = await getConversationHistory(from, 10);
+
         // Process message through AgentService (includes user lookup and context injection)
         const agentResponse = await processAgentMessage({
           userMessage: incomingMsg,
@@ -248,22 +242,11 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // Add user message to history
-        history.push({
-          role: 'user',
-          content: incomingMsg
-        });
+        // Save user message to MongoDB
+        await saveMessageToHistory(from, 'user', incomingMsg);
 
-        // Add AI response to history
-        history.push({
-          role: 'assistant',
-          content: agentResponse.response
-        });
-
-        // Keep only last 20 messages
-        if (history.length > 20) {
-          history.splice(0, history.length - 20);
-        }
+        // Save AI response to MongoDB
+        await saveMessageToHistory(from, 'assistant', agentResponse.response);
 
         // Send response
         await twilioClient.messages.create({
@@ -403,7 +386,6 @@ app.get('/status', (req, res) => {
     status: 'online',
     version: '3.0.0',
     timestamp: new Date().toISOString(),
-    activeConversations: conversationHistory.size,
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });

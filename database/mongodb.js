@@ -184,6 +184,20 @@ const PendingConfirmationSchema = new Schema({
 
 PendingConfirmationSchema.index({ userId: 1, status: 1 });
 
+/**
+ * ConversationHistory Schema
+ * Stores message history for context preservation
+ */
+const ConversationHistorySchema = new Schema({
+  phoneNumber: { type: String, required: true, index: true },
+  role: { type: String, enum: ['user', 'assistant'], required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now, index: true, expires: '7d' } // Auto-delete after 7 days
+});
+
+// Compound index for efficient queries
+ConversationHistorySchema.index({ phoneNumber: 1, createdAt: -1 });
+
 // ============================================================================
 // MODELS
 // ============================================================================
@@ -192,6 +206,7 @@ const MediaFile = mongoose.model('MediaFile', MediaFileSchema);
 const User = mongoose.model('User', UserSchema);
 const AccessRequest = mongoose.model('AccessRequest', AccessRequestSchema);
 const PendingConfirmation = mongoose.model('PendingConfirmation', PendingConfirmationSchema);
+const ConversationHistory = mongoose.model('ConversationHistory', ConversationHistorySchema);
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -419,6 +434,54 @@ async function updateAccessRequestStatus(requestId, status) {
   return request;
 }
 
+/**
+ * Save a message to conversation history
+ * @param {string} phoneNumber - User's phone number
+ * @param {string} role - 'user' or 'assistant'
+ * @param {string} content - Message content
+ */
+async function saveMessageToHistory(phoneNumber, role, content) {
+  if (!content || !content.trim()) {
+    return; // Skip empty messages
+  }
+
+  const message = new ConversationHistory({
+    phoneNumber: phoneNumber.replace('whatsapp:', ''), // Clean phone number
+    role,
+    content: content.trim()
+  });
+
+  await message.save();
+}
+
+/**
+ * Get conversation history for a user
+ * @param {string} phoneNumber - User's phone number
+ * @param {number} limit - Number of messages to retrieve (default: 10 = ~5 exchanges)
+ * @returns {Promise<Array>} - Array of messages {role, content}
+ */
+async function getConversationHistory(phoneNumber, limit = 10) {
+  const cleanPhone = phoneNumber.replace('whatsapp:', '');
+
+  const messages = await ConversationHistory.find({ phoneNumber: cleanPhone })
+    .sort({ createdAt: -1 }) // Most recent first
+    .limit(limit)
+    .select('role content -_id') // Only return role and content
+    .lean();
+
+  // Reverse to get chronological order (oldest first)
+  return messages.reverse();
+}
+
+/**
+ * Clear conversation history for a user (optional - for privacy)
+ * @param {string} phoneNumber - User's phone number
+ */
+async function clearConversationHistory(phoneNumber) {
+  const cleanPhone = phoneNumber.replace('whatsapp:', '');
+  await ConversationHistory.deleteMany({ phoneNumber: cleanPhone });
+}
+
 module.exports = {
   connectMongoDB,
   MediaFile,
@@ -436,5 +499,8 @@ module.exports = {
   grantFileAccess,
   createAccessRequest,
   getPendingAccessRequest,
-  updateAccessRequestStatus
+  updateAccessRequestStatus,
+  saveMessageToHistory,
+  getConversationHistory,
+  clearConversationHistory
 };
