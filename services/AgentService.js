@@ -26,17 +26,45 @@ const openai = new OpenAI({
 });
 
 /**
+ * Get polite name for addressing the user
+ * Priority: profileData.displayNames.preferred > "Sr./Sra. {Capitalized Alias}"
+ *
+ * @param {Object} user - The user object from MongoDB
+ * @returns {string} - Polite name for addressing the user
+ */
+function getPoliteName(user) {
+  if (!user) {
+    return 'Estimado Usuario/a';
+  }
+
+  // Priority 1: Check if custom displayNames are configured
+  if (user.profileData && user.profileData.displayNames && user.profileData.displayNames.preferred) {
+    return user.profileData.displayNames.preferred;
+  }
+
+  // Priority 2: Fall back to "Sr./Sra. {Capitalized Alias}"
+  const alias = user.alias || user.title || 'Usuario/a';
+
+  // Capitalize first letter
+  const capitalized = alias.charAt(0).toUpperCase() + alias.slice(1);
+
+  return `Sr. ${capitalized}`;
+}
+
+/**
  * Build the system prompt with user context
  */
 function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false, replyContext = null) {
+  // Get polite display name (checks profileData.displayNames first)
+  const politeName = getPoliteName(user);
+
   // User context with alias, full name, and email
   let userContext = '';
   if (user) {
-    const alias = user.alias || user.title || 'Estimado Usuario/a';
     const fullName = user.fullName || user.name || '';
     const email = user.email || 'Not Set';
 
-    userContext = `\n\n👤 USER CONTEXT: You are speaking with ${alias}${fullName ? ` (${fullName})` : ''}. Address the user respectfully using their alias. ${email !== 'Not Set' ? `Their email is ${email}.` : ''} Never ask the user for their name.`;
+    userContext = `\n\n👤 USER CONTEXT: You are speaking with ${politeName}${fullName ? ` (${fullName})` : ''}. Address the user respectfully using "${politeName}" when greeting or responding. ${email !== 'Not Set' ? `Their email is ${email}.` : ''} Never ask the user for their name.`;
   } else {
     userContext = '\n\n👤 USER CONTEXT: You are speaking with Estimado Usuario/a. Address the user respectfully.';
   }
@@ -192,12 +220,12 @@ When user wants to find a file:
 User: [sends image of Dominican ID]
 System: [Auto-analyzed: "Dominican ID card, keywords: cedula id identificacion..."]
 You: Call \`save_file\` (no custom_name)
-Response: "✅ Cédula guardada, ${user.alias}! Generé palabras clave inteligentes para búsqueda rápida."
+Response: "✅ Cédula guardada, ${politeName}! Generé palabras clave inteligentes para búsqueda rápida."
 
 **Example 2: Smart Search**
 User: "Enviame mi cedula"
 You: Call \`search_files\` with query "cedula id identificacion documento personal dominicana"
-Response: [If found] "📎 Aquí está tu cédula, ${user.alias}!"
+Response: [If found] "📎 Aquí está tu cédula, ${politeName}!"
 
 **Example 3: Admin Locked File**
 User (admin): "Busca el pasaporte de Jose"
@@ -1274,5 +1302,6 @@ module.exports = {
   processMessage,
   buildSystemPrompt,
   executeTool,
-  sendWhatsAppMessage
+  sendWhatsAppMessage,
+  getPoliteName
 };
