@@ -988,6 +988,8 @@ async function executeTool(toolName, args, context) {
               user: process.env.SMTP_USER || process.env.SMTP_EMAIL,
               pass: process.env.SMTP_PASS
             },
+            // Force IPv4 to prevent IPv6/IPv4 protocol conflicts
+            family: 4,
             // Enhanced connection settings to fix ETIMEDOUT
             connectionTimeout: 10000, // 10 seconds
             greetingTimeout: 10000,
