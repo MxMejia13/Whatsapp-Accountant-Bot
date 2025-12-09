@@ -196,11 +196,58 @@ app.post('/webhook', async (req, res) => {
             });
 
           } else if (result.action === 'CHAT') {
-            // Voice message treated as chat (not saved)
-            console.log(`💬 Voice message treated as chat`);
+            // Voice message treated as chat (not saved) - Route to Agent
+            console.log(`💬 Voice message treated as chat - routing to Agent`);
 
-            // Pass to AgentService for processing
-            // (This would be handled in the text message section below)
+            if (result.transcribedText && result.transcribedText.trim()) {
+              try {
+                // Retrieve conversation history
+                const history = await getConversationHistory(from, 10);
+
+                // Process transcribed text through AgentService
+                const agentResponse = await processAgentMessage({
+                  userMessage: result.transcribedText,
+                  conversationHistory: history,
+                  phoneNumber: from,
+                  hasMediaAttached: true,
+                  mediaType: 'audio/voice',
+                  mediaAnalysis: null
+                });
+
+                if (agentResponse.success) {
+                  // Save user's transcribed message to history
+                  await saveMessageToHistory(from, 'user', result.transcribedText);
+
+                  // Save AI response to history
+                  await saveMessageToHistory(from, 'assistant', agentResponse.response);
+
+                  // Send AI response to user
+                  await twilioClient.messages.create({
+                    from: process.env.TWILIO_WHATSAPP_NUMBER,
+                    to: from,
+                    body: agentResponse.response
+                  });
+
+                  console.log(`✅ Agent processed voice message and replied`);
+                } else {
+                  console.error('❌ Agent processing failed:', agentResponse.error);
+                  await twilioClient.messages.create({
+                    from: process.env.TWILIO_WHATSAPP_NUMBER,
+                    to: from,
+                    body: 'Lo siento, tuve un problema procesando tu mensaje de voz. Por favor, intenta de nuevo.'
+                  });
+                }
+              } catch (agentError) {
+                console.error('❌ Error routing voice to Agent:', agentError);
+                await twilioClient.messages.create({
+                  from: process.env.TWILIO_WHATSAPP_NUMBER,
+                  to: from,
+                  body: 'Lo siento, tuve un problema procesando tu mensaje de voz.'
+                });
+              }
+            } else {
+              console.warn('⚠️  CHAT action but no transcribedText found');
+            }
 
           } else if (result.action === 'ERROR') {
             // Error occurred during processing
