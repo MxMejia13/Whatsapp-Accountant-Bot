@@ -667,6 +667,129 @@ async function executeTool(toolName, args, context) {
         };
       }
 
+      case 'list_documents': {
+        // List user's documents with optional filters
+        const { documentType, limit = 20, searchQuery } = args;
+
+        try {
+          const { searchMediaFiles } = require('../database/mongodb');
+
+          // Build query
+          let query = { ownerPhoneNumber: phoneNumber };
+
+          if (documentType) {
+            query.documentType = documentType;
+          }
+
+          // If searchQuery provided, use text search
+          if (searchQuery) {
+            const results = await searchMediaFiles(phoneNumber, searchQuery, limit);
+            return {
+              success: true,
+              files: results.map(file => ({
+                filename: file.filename,
+                description: file.description,
+                documentType: file.documentType,
+                date: file.documentDate || file.createdAt,
+                vendorName: file.vendorName,
+                amount: file.amount,
+                url: file.url
+              })),
+              count: results.length
+            };
+          }
+
+          // Otherwise, list recent files
+          const { MediaFile } = require('../database/mongodb');
+          const files = await MediaFile.find(query)
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .select('filename description documentType documentDate vendorName amount createdAt url')
+            .lean();
+
+          return {
+            success: true,
+            files: files.map(file => ({
+              filename: file.filename,
+              description: file.description,
+              documentType: file.documentType,
+              date: file.documentDate || file.createdAt,
+              vendorName: file.vendorName,
+              amount: file.amount,
+              url: file.url
+            })),
+            count: files.length
+          };
+        } catch (error) {
+          console.error('Error listing documents:', error);
+          return {
+            success: false,
+            error: `Error listing documents: ${error.message}`
+          };
+        }
+      }
+
+      case 'delete_document': {
+        // Delete a document from both R2 and MongoDB
+        const { filename } = args;
+
+        if (!filename) {
+          return {
+            success: false,
+            error: 'Filename is required'
+          };
+        }
+
+        try {
+          const { MediaFile } = require('../database/mongodb');
+          const { deleteFile } = require('./CloudStorage');
+
+          // Find the file
+          const file = await MediaFile.findOne({
+            ownerPhoneNumber: phoneNumber,
+            filename: filename
+          });
+
+          if (!file) {
+            return {
+              success: false,
+              error: `File not found: ${filename}`
+            };
+          }
+
+          // Delete from R2
+          if (file.s3Key) {
+            try {
+              await deleteFile(file.s3Key);
+              console.log(`✅ Deleted from R2: ${file.s3Key}`);
+            } catch (r2Error) {
+              console.error(`⚠️  R2 deletion failed (continuing):`, r2Error.message);
+              // Continue even if R2 deletion fails
+            }
+          }
+
+          // Delete from MongoDB
+          await MediaFile.deleteOne({ _id: file._id });
+          console.log(`✅ Deleted from MongoDB: ${file.filename}`);
+
+          return {
+            success: true,
+            message: `Successfully deleted: ${filename}`,
+            deletedFile: {
+              filename: file.filename,
+              documentType: file.documentType,
+              createdAt: file.createdAt
+            }
+          };
+        } catch (error) {
+          console.error('Error deleting document:', error);
+          return {
+            success: false,
+            error: `Error deleting document: ${error.message}`
+          };
+        }
+      }
+
       default:
         return {
           success: false,

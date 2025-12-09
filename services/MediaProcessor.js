@@ -1016,6 +1016,72 @@ function articuloFor(word) {
   return femenino.includes(word.toLowerCase()) ? 'una' : 'un';
 }
 
+/**
+ * Process email attachment (similar to processMedia but for email workflow)
+ * Returns processed media with R2 URL and metadata
+ */
+async function processEmailAttachment(options) {
+  const {
+    attachmentBuffer,
+    filename,
+    mimeType,
+    ownerPhoneNumber,
+    ownerTitle,
+    emailSubject
+  } = options;
+
+  try {
+    console.log(`📧 Processing email attachment: ${filename}`);
+
+    // Call processMedia with the attachment buffer
+    const result = await processMedia({
+      mediaBuffer: attachmentBuffer,
+      mimeType,
+      originalName: filename,
+      ownerPhoneNumber,
+      ownerTitle,
+      userMessage: `Email: ${emailSubject}`,
+      isForwarded: false
+    });
+
+    // For email attachments, we always want to save (not ask)
+    if (result.action === 'SAVED') {
+      // Return the savedFile data in a format compatible with index.js
+      return {
+        url: result.savedFile.url,
+        s3Key: result.savedFile.s3Key,
+        filename: result.savedFile.filename,
+        description: result.savedFile.description,
+        keywords: result.savedFile.keywords,
+        detectedText: result.savedFile.detectedText,
+        documentType: result.savedFile.documentType,
+        confidence: result.savedFile.confidence,
+        fileSize: result.savedFile.fileSize
+      };
+    } else if (result.action === 'ASK') {
+      // For low confidence, use the suggested filename
+      return {
+        url: result.pending.s3Url || '',
+        s3Key: result.pending.s3Key || '',
+        filename: result.pending.suggestedFilename || filename,
+        description: result.pending.suggestedDescription || '',
+        keywords: result.pending.suggestedKeywords || [],
+        detectedText: result.pending.detectedText || '',
+        documentType: result.pending.documentType || 'document',
+        confidence: result.pending.confidence || 0,
+        fileSize: attachmentBuffer.length
+      };
+    } else if (result.action === 'ERROR') {
+      throw new Error(result.error || 'Processing failed');
+    }
+
+  } catch (error) {
+    console.error('❌ processEmailAttachment error:', error);
+    throw error;
+  }
+}
+
 module.exports = {
-  processMedia
+  processMedia,
+  processEmailAttachment
 };

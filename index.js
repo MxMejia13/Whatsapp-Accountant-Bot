@@ -323,8 +323,8 @@ app.post('/webhooks/email', async (req, res) => {
 
           console.log(`📎 Processing attachment: ${filename} (${contentType})`);
 
-          // Process with MediaProcessor
-          const processedMedia = await processEmailAttachment({
+          // Process with MediaProcessor (already saves to R2 and MongoDB internally)
+          const result = await processEmailAttachment({
             attachmentBuffer,
             filename,
             mimeType: contentType,
@@ -333,26 +333,8 @@ app.post('/webhooks/email', async (req, res) => {
             emailSubject: subject
           });
 
-          // Save to MongoDB
-          const savedFile = await saveMediaFile({
-            ownerPhoneNumber: user.phoneNumber,
-            ownerTitle: user.title || user.name,
-            url: processedMedia.url,
-            s3Key: processedMedia.s3Key,
-            filename: processedMedia.filename,
-            description: processedMedia.description,
-            keywords: processedMedia.keywords,
-            detectedText: processedMedia.detectedText,
-            documentType: processedMedia.documentType,
-            confidence: processedMedia.confidence,
-            originalName: filename,
-            mimeType: contentType,
-            fileSize: processedMedia.fileSize,
-            isForwarded: false
-          });
-
-          savedFiles.push(savedFile);
-          console.log(`✅ Saved email attachment: ${savedFile.filename}`);
+          savedFiles.push(result);
+          console.log(`✅ Saved email attachment: ${result.filename}`);
 
         } catch (error) {
           console.error(`❌ Error processing attachment ${filename}:`, error);

@@ -154,6 +154,51 @@ const tools = [
         properties: {}
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_documents',
+      description: 'List user\'s documents with optional filtering by type or search query. Returns metadata including filename, description, document type, date, vendor name, and amount.',
+      parameters: {
+        type: 'object',
+        properties: {
+          documentType: {
+            type: 'string',
+            enum: ['passport', 'id_card', 'receipt', 'invoice', 'contract', 'bill', 'photo', 'audio', 'document'],
+            description: 'Filter by document type (optional)'
+          },
+          searchQuery: {
+            type: 'string',
+            description: 'Text search query to filter documents (optional)'
+          },
+          limit: {
+            type: 'integer',
+            description: 'Maximum number of documents to return (default: 20)',
+            default: 20,
+            minimum: 1,
+            maximum: 100
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_document',
+      description: 'Delete a document from both cloud storage (R2) and database. Requires exact filename. Use this when user explicitly asks to delete a file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'Exact filename of the document to delete (e.g., "receipt-walmart-2024-12-09")'
+          }
+        },
+        required: ['filename']
+      }
+    }
   }
 ];
 
