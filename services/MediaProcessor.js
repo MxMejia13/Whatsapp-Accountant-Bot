@@ -3,11 +3,14 @@
  *
  * Intelligent media handling that runs BEFORE the main Agent
  * Implements:
+ * - Twilio-Authenticated Media Download
  * - Audio Heuristic (Direct voice vs Forwarded audio)
  * - Vision Analysis (OCR, document type detection)
  * - Smart Save (Auto-save if confident, ask if unsure)
+ * - BULLETPROOF R2 Upload Pipeline with Comprehensive Validation
  */
 
+const axios = require('axios');
 const OpenAI = require('openai');
 const { uploadFile } = require('./CloudStorage');
 const { saveMediaFile, PendingConfirmation } = require('../database/mongodb');
@@ -16,32 +19,223 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// Twilio credentials for authenticated media downloads
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+
 // Confidence threshold for auto-save (0-100%)
 const AUTO_SAVE_CONFIDENCE = 80;
 
 /**
+ * Download media from Twilio with proper authentication
+ * Twilio requires Basic Auth to access protected media files
+ *
+ * @param {string} mediaUrl - The Twilio media URL from the webhook
+ * @returns {Promise<Buffer>} - The downloaded media as a Buffer
+ */
+async function downloadMediaFromTwilio(mediaUrl) {
+  try {
+    if (!mediaUrl || typeof mediaUrl !== 'string') {
+      throw new Error('Invalid mediaUrl provided');
+    }
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+      throw new Error('Missing Twilio credentials (TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN)');
+    }
+
+    console.log(`📥 Downloading media from Twilio...`);
+    console.log(`   URL: ${mediaUrl.substring(0, 60)}...`);
+
+    // Create Basic Auth header: Base64(ACCOUNT_SID:AUTH_TOKEN)
+    const authString = `${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`;
+    const base64Auth = Buffer.from(authString).toString('base64');
+
+    // Download with authentication
+    const response = await axios.get(mediaUrl, {
+      headers: {
+        'Authorization': `Basic ${base64Auth}`
+      },
+      responseType: 'arraybuffer',
+      timeout: 30000, // 30 second timeout
+      maxContentLength: 50 * 1024 * 1024, // 50MB max
+      validateStatus: (status) => status === 200 // Only accept 200 OK
+    });
+
+    // Validate response
+    if (!response.data) {
+      throw new Error('Twilio returned empty response');
+    }
+
+    const mediaBuffer = Buffer.from(response.data);
+
+    if (mediaBuffer.length === 0) {
+      throw new Error('Downloaded media is empty (0 bytes)');
+    }
+
+    console.log(`   ✅ Download complete: ${mediaBuffer.length} bytes`);
+
+    return mediaBuffer;
+
+  } catch (error) {
+    console.error('❌ downloadMediaFromTwilio: Error:', error.message);
+
+    if (error.response) {
+      console.error(`   HTTP Status: ${error.response.status}`);
+      console.error(`   HTTP Status Text: ${error.response.statusText}`);
+
+      if (error.response.status === 401 || error.response.status === 403) {
+        throw new Error('Twilio authentication failed - check ACCOUNT_SID and AUTH_TOKEN');
+      }
+    }
+
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Download timeout - media file too large or network issue');
+    }
+
+    throw new Error(`Failed to download media from Twilio: ${error.message}`);
+  }
+}
+
+/**
  * Process media BEFORE passing to main Agent
  * Returns processed result with instructions for Agent
+ *
+ * CRITICAL PIPELINE:
+ * 0. Download media from Twilio (if mediaUrl provided instead of mediaBuffer)
+ * 1. Validate media buffer
+ * 2. Analyze media (Vision API or Whisper)
+ * 3. Upload to R2 Storage (VALIDATE SUCCESS)
+ * 4. Save metadata to MongoDB (ONLY if R2 upload succeeded)
+ * 5. Return result with ALL required fields or ERROR
  */
 async function processMedia(options) {
-  const {
+  let {
     mediaBuffer,
+    mediaUrl,
     mimeType,
     originalName,
     userId,
+    ownerPhoneNumber, // Alternative to userId
     userTitle,
+    ownerTitle, // Alternative to userTitle
     userMessage,
-    isForwarded
+    isForwarded,
+    twilioMessageSid // Twilio Message SID for reply context linking
   } = options;
 
-  console.log(`\n🎬 MediaProcessor: Processing ${mimeType} (Forwarded: ${isForwarded})`);
+  // Handle parameter aliases
+  userId = userId || ownerPhoneNumber;
+  userTitle = userTitle || ownerTitle;
 
-  // =========================================================================
-  // AUDIO HEURISTIC: Critical Decision Point
-  // =========================================================================
+  // CRITICAL: Validate userId is set (required for all operations)
+  console.log(`🔍 processMedia called with:`);
+  console.log(`   userId: ${userId} (${typeof userId})`);
+  console.log(`   ownerPhoneNumber: ${ownerPhoneNumber} (${typeof ownerPhoneNumber})`);
+  console.log(`   userTitle: ${userTitle} (${typeof userTitle})`);
+  console.log(`   ownerTitle: ${ownerTitle} (${typeof ownerTitle})`);
+  console.log(`   mimeType: ${mimeType}`);
+  console.log(`   mediaUrl: ${mediaUrl ? 'provided' : 'not provided'}`);
+  console.log(`   mediaBuffer: ${mediaBuffer ? 'provided' : 'not provided'}`);
 
-  if (mimeType?.startsWith('audio/')) {
-    return await processAudio({
+  try {
+    // =========================================================================
+    // STEP 0: DOWNLOAD FROM TWILIO IF NEEDED
+    // =========================================================================
+
+    if (!mediaBuffer && mediaUrl) {
+      console.log(`🔄 No buffer provided - downloading from Twilio...`);
+
+      try {
+        mediaBuffer = await downloadMediaFromTwilio(mediaUrl);
+      } catch (downloadError) {
+        console.error('❌ MediaProcessor: Download failed:', downloadError.message);
+        return {
+          action: 'ERROR',
+          error: `Download failed: ${downloadError.message}`,
+          message: 'Lo siento, no pude descargar el archivo multimedia de WhatsApp. Por favor, intenta enviarlo de nuevo.'
+        };
+      }
+    }
+
+    // =========================================================================
+    // CRITICAL INPUT VALIDATION - PREVENT ALL CRASHES
+    // =========================================================================
+
+    if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer)) {
+      console.error('❌ MediaProcessor: Invalid media buffer');
+      console.error('   mediaBuffer exists:', !!mediaBuffer);
+      console.error('   is Buffer:', Buffer.isBuffer(mediaBuffer));
+      console.error('   mediaUrl provided:', !!mediaUrl);
+      return {
+        action: 'ERROR',
+        error: 'Invalid media buffer',
+        message: 'Lo siento, no pude descargar el archivo multimedia. Por favor, intenta enviarlo de nuevo.'
+      };
+    }
+
+    if (mediaBuffer.length === 0) {
+      console.error('❌ MediaProcessor: Empty media buffer (0 bytes)');
+      return {
+        action: 'ERROR',
+        error: 'Empty media buffer',
+        message: 'Lo siento, el archivo está vacío. Por favor, intenta enviarlo de nuevo.'
+      };
+    }
+
+    if (!mimeType || typeof mimeType !== 'string') {
+      console.error('❌ MediaProcessor: Invalid MIME type:', mimeType);
+      return {
+        action: 'ERROR',
+        error: 'Invalid MIME type',
+        message: 'Lo siento, el tipo de archivo no es reconocido. Por favor, intenta con otro formato.'
+      };
+    }
+
+    if (!userId) {
+      console.error('❌ MediaProcessor: Missing userId');
+      return {
+        action: 'ERROR',
+        error: 'Missing userId',
+        message: 'Lo siento, hubo un error identificando tu cuenta. Por favor, intenta de nuevo.'
+      };
+    }
+
+    console.log(`\n🎬 MediaProcessor: Processing ${mimeType}`);
+    console.log(`   Buffer size: ${mediaBuffer.length} bytes`);
+    console.log(`   User: ${userTitle || userId}`);
+    console.log(`   Forwarded: ${isForwarded || false}`);
+    console.log(`   Original name: ${originalName || 'unknown'}`);
+
+    // =========================================================================
+    // ROUTE TO APPROPRIATE PROCESSOR
+    // =========================================================================
+
+    if (mimeType.startsWith('audio/')) {
+      return await processAudio({
+        mediaBuffer,
+        mimeType,
+        originalName,
+        userId,
+        userTitle,
+        userMessage,
+        isForwarded
+      });
+    }
+
+    if (mimeType.startsWith('image/')) {
+      return await processImage({
+        mediaBuffer,
+        mimeType,
+        originalName,
+        userId,
+        userTitle,
+        userMessage,
+        isForwarded
+      });
+    }
+
+    // Other file types (PDF, Word, etc.)
+    return await processDocument({
       mediaBuffer,
       mimeType,
       originalName,
@@ -50,37 +244,16 @@ async function processMedia(options) {
       userMessage,
       isForwarded
     });
+
+  } catch (error) {
+    console.error('❌ MediaProcessor: Fatal error:', error);
+    console.error('   Stack:', error.stack);
+    return {
+      action: 'ERROR',
+      error: error.message,
+      message: 'Lo siento, hubo un error procesando tu archivo. Por favor, intenta de nuevo.'
+    };
   }
-
-  // =========================================================================
-  // IMAGE/DOCUMENT: Vision Analysis
-  // =========================================================================
-
-  if (mimeType?.startsWith('image/')) {
-    return await processImage({
-      mediaBuffer,
-      mimeType,
-      originalName,
-      userId,
-      userTitle,
-      userMessage,
-      isForwarded
-    });
-  }
-
-  // =========================================================================
-  // OTHER FILE TYPES: Generic handling
-  // =========================================================================
-
-  return await processDocument({
-    mediaBuffer,
-    mimeType,
-    originalName,
-    userId,
-    userTitle,
-    userMessage,
-    isForwarded
-  });
 }
 
 /**
@@ -93,93 +266,125 @@ async function processAudio(options) {
     originalName,
     userId,
     userTitle,
+    transcribedText,
+    filenameSuggestion,
     userMessage,
     isForwarded
   } = options;
 
-  console.log(`🎙️  Audio Heuristic: ${isForwarded ? 'FORWARDED' : 'DIRECT'}`);
+  try {
+    // Validate buffer
+    if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer) || mediaBuffer.length === 0) {
+      console.error('❌ processAudio: Invalid audio buffer');
+      return {
+        action: 'ERROR',
+        error: 'Invalid audio buffer',
+        message: 'Lo siento, el archivo de audio está corrupto o vacío.'
+      };
+    }
 
-  // Transcribe with Whisper
-  const { toFile } = require('openai/uploads');
-  const audioFile = await toFile(mediaBuffer, 'audio.ogg', { type: mimeType });
-  const transcription = await openai.audio.transcriptions.create({
-    file: audioFile,
-    model: 'whisper-1',
-    language: 'es'
-  });
+    console.log(`🎙️  Audio: ${isForwarded ? 'FORWARDED' : 'DIRECT'} (${mediaBuffer.length} bytes)`);
 
-  const transcribedText = transcription.text;
-  console.log(`✅ Transcribed: "${transcribedText.substring(0, 100)}..."`);
+    // Transcribe with Whisper
+    const { toFile } = require('openai/uploads');
+    const audioFile = await toFile(mediaBuffer, 'audio.ogg', { type: mimeType });
 
-  // =========================================================================
-  // SCENARIO A: Direct Voice Note (NOT Forwarded)
-  // User is TALKING to the bot - DO NOT SAVE
-  // =========================================================================
-
-  if (!isForwarded) {
-    console.log(`💬 Direct voice message - treating as chat`);
-    return {
-      action: 'CHAT',
-      transcribedText: transcribedText,
-      message: `[User sent voice message]: ${transcribedText}`
-    };
-  }
-
-  // =========================================================================
-  // SCENARIO B: Forwarded Audio
-  // User is SAVING a recording - SAVE IT
-  // =========================================================================
-
-  console.log(`💾 Forwarded audio - saving as file`);
-
-  // Generate intelligent filename from transcription
-  const filenameSuggestion = await generateAudioFilename(transcribedText);
-
-  // Check confidence
-  const confidence = 85; // Audio files are generally straightforward
-
-  if (confidence >= AUTO_SAVE_CONFIDENCE) {
-    // AUTO-SAVE
-    const savedFile = await saveAudioFile({
-      mediaBuffer,
-      mimeType,
-      originalName,
-      userId,
-      userTitle,
-      transcribedText,
-      filenameSuggestion,
-      confidence
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: 'whisper-1',
+      language: 'es'
     });
 
-    return {
-      action: 'SAVED',
-      savedFile: savedFile,
-      message: `✅ Audio guardado como "${savedFile.filename}". Transcripción: "${transcribedText.substring(0, 150)}..."`
-    };
-  } else {
-    // ASK USER
-    const pending = await createPendingConfirmation({
-      userId,
-      mediaBuffer,
-      mimeType,
-      suggestedFilename: filenameSuggestion,
-      detectedText: transcribedText,
-      confidence,
-      documentType: 'audio',
-      userMessage,
-      isForwarded
-    });
+    const transcribedText = transcription.text;
 
+    if (!transcribedText || transcribedText.trim().length === 0) {
+      console.log('⚠️  Empty transcription');
+      return {
+        action: 'ERROR',
+        error: 'Empty transcription',
+        message: 'No pude transcribir el audio. Por favor, asegúrate de que tenga contenido hablado.'
+      };
+    }
+
+    console.log(`✅ Transcribed: "${transcribedText.substring(0, 100)}..."`);
+
+    // =========================================================================
+    // SCENARIO A: Direct Voice Note (NOT Forwarded) - DO NOT SAVE
+    // =========================================================================
+
+    if (!isForwarded) {
+      console.log(`💬 Direct voice message - treating as chat`);
+      return {
+        action: 'CHAT',
+        transcribedText: transcribedText,
+        message: `[User sent voice message]: ${transcribedText}`
+      };
+    }
+
+    // =========================================================================
+    // SCENARIO B: Forwarded Audio - SAVE IT
+    // =========================================================================
+
+    console.log(`💾 Forwarded audio - saving`);
+
+    // Generate filename
+    const filenameSuggestion = await generateAudioFilename(transcribedText);
+    const confidence = 85;
+
+    if (confidence >= AUTO_SAVE_CONFIDENCE) {
+      // AUTO-SAVE
+      const savedFile = await saveAudioFile({
+        mediaBuffer,
+        mimeType,
+        originalName,
+        userId,
+        userTitle,
+        transcribedText,
+        filenameSuggestion,
+        confidence,
+        twilioMessageSid
+      });
+
+      return {
+        action: 'SAVED',
+        savedFile: savedFile,
+        message: `✅ Audio guardado como "${savedFile.filename}". Transcripción: "${transcribedText.substring(0, 150)}..."`
+      };
+    } else {
+      // ASK USER
+      const pending = await createPendingConfirmation({
+        userId,
+        mediaBuffer,
+        mimeType,
+        suggestedFilename: filenameSuggestion,
+        detectedText: transcribedText,
+        confidence,
+        documentType: 'audio',
+        userMessage,
+        isForwarded
+      });
+
+      return {
+        action: 'ASK',
+        pending: pending,
+        message: `🎙️ Recibí un audio. Parece ser sobre "${filenameSuggestion}". ¿Cómo quieres que lo guarde?`
+      };
+    }
+
+  } catch (error) {
+    console.error('❌ processAudio: Error:', error);
+    console.error('   Stack:', error.stack);
     return {
-      action: 'ASK',
-      pending: pending,
-      message: `🎙️ Recibí un audio. Parece ser sobre "${filenameSuggestion}". ¿Cómo quieres que lo guarde? (o responde "no guardar" para descartar)`
+      action: 'ERROR',
+      error: error.message,
+      message: 'Lo siento, hubo un error procesando el audio. Por favor, intenta de nuevo.'
     };
   }
 }
 
 /**
  * Image Processing with Vision Analysis
+ * CRITICAL: This function MUST validate R2 upload before MongoDB save
  */
 async function processImage(options) {
   const {
@@ -192,104 +397,246 @@ async function processImage(options) {
     isForwarded
   } = options;
 
-  console.log(`👁️  Vision Analysis starting...`);
+  try {
+    // =========================================================================
+    // INPUT VALIDATION
+    // =========================================================================
 
-  // Analyze with GPT-4o Vision
-  const base64Image = mediaBuffer.toString('base64');
-  const visionResponse = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [{
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: `Analyze this image in detail. You are a document analysis AI.
+    if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer)) {
+      console.error('❌ processImage: Invalid buffer (null or not a Buffer)');
+      return {
+        action: 'ERROR',
+        error: 'Invalid image buffer',
+        message: 'Lo siento, no pude procesar la imagen. El archivo parece estar corrupto.'
+      };
+    }
+
+    if (mediaBuffer.length === 0) {
+      console.error('❌ processImage: Empty buffer (0 bytes)');
+      return {
+        action: 'ERROR',
+        error: 'Empty image buffer',
+        message: 'Lo siento, la imagen está vacía. Por favor, intenta enviarla de nuevo.'
+      };
+    }
+
+    if (!mimeType || !mimeType.startsWith('image/')) {
+      console.error('❌ processImage: Invalid MIME type:', mimeType);
+      return {
+        action: 'ERROR',
+        error: 'Invalid MIME type',
+        message: 'Lo siento, el archivo no parece ser una imagen válida.'
+      };
+    }
+
+    console.log(`👁️  Vision Analysis: ${mimeType} (${mediaBuffer.length} bytes)`);
+
+    // =========================================================================
+    // SAFE BASE64 CONVERSION
+    // =========================================================================
+
+    let base64Image;
+    try {
+      base64Image = mediaBuffer.toString('base64');
+
+      if (!base64Image || base64Image.length === 0) {
+        throw new Error('Base64 conversion resulted in empty string');
+      }
+    } catch (conversionError) {
+      console.error('❌ processImage: Base64 conversion failed:', conversionError);
+      return {
+        action: 'ERROR',
+        error: 'Base64 conversion failed',
+        message: 'Lo siento, no pude procesar la imagen. Por favor, intenta de nuevo.'
+      };
+    }
+
+    // =========================================================================
+    // VISION API CALL WITH FALLBACK
+    // =========================================================================
+
+    let analysis;
+    try {
+      const visionResponse = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Analyze this image in detail. You are a document analysis AI with OCR and data extraction capabilities.
 
 TASK:
 1. Identify the document type (passport, ID card, receipt, invoice, contract, photo, etc.)
-2. Extract ALL visible text (OCR)
+2. Extract ALL visible text (OCR) - capture EVERYTHING readable
 3. Generate a descriptive filename (3-5 words, lowercase, hyphens only)
 4. Generate 5-10 search keywords
 5. Write a brief description
 6. Rate your confidence (0-100%) about what this document is
+7. **EXTRACT STRUCTURED DATA** (for receipts, invoices, bills):
+   - documentDate: Date on the document (ISO 8601 format: YYYY-MM-DD)
+   - vendorName: Business/merchant name
+   - amount: Total amount (number only, no currency symbols)
+   - currency: Currency code (USD, DOP, EUR, etc.)
+   - fullOcrText: Complete raw text exactly as it appears
 
 FORMAT YOUR RESPONSE AS JSON:
 {
-  "documentType": "passport" | "id_card" | "receipt" | "invoice" | "contract" | "photo" | "screenshot" | "other",
-  "filename": "passport-usa-john-doe",
-  "description": "US Passport for John Doe, issued 2020",
-  "keywords": ["passport", "travel", "id", "usa", "john doe"],
-  "detectedText": "FULL TEXT EXTRACTED FROM IMAGE...",
-  "confidence": 95
+  "documentType": "passport" | "id_card" | "receipt" | "invoice" | "contract" | "bill" | "photo" | "screenshot" | "other",
+  "filename": "receipt-walmart-2024-12-09",
+  "description": "Walmart receipt for grocery purchase, total $45.67",
+  "keywords": ["receipt", "walmart", "grocery", "purchase", "food"],
+  "detectedText": "Summary of main content...",
+  "confidence": 95,
+  "documentDate": "2024-12-09",
+  "vendorName": "Walmart",
+  "amount": 45.67,
+  "currency": "USD",
+  "fullOcrText": "WALMART\\nStore #1234\\nDate: 12/09/2024\\nTime: 14:30\\nItem 1: $10.00\\nItem 2: $35.67\\nTotal: $45.67\\nThank you!"
 }
 
-BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card with high confidence.`
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: `data:${mimeType};base64,${base64Image}`
+IMPORTANT:
+- For receipts/invoices: ALWAYS extract documentDate, vendorName, amount, currency, and fullOcrText
+- For other documents: Set these fields to null if not applicable
+- detectedText: Brief summary of content
+- fullOcrText: Complete verbatim text from image
+- BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card with high confidence.`
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${mimeType};base64,${base64Image}`
+              }
+            }
+          ]
+        }],
+        max_tokens: 1500,
+        response_format: { type: 'json_object' }
+      });
+
+      if (!visionResponse?.choices?.[0]?.message?.content) {
+        throw new Error('Vision API returned empty response');
+      }
+
+      analysis = JSON.parse(visionResponse.choices[0].message.content);
+
+      // Validate required fields
+      if (!analysis.documentType || !analysis.filename) {
+        throw new Error('Vision analysis missing required fields');
+      }
+
+      // Ensure defaults for optional fields
+      analysis.keywords = analysis.keywords || [];
+      analysis.detectedText = analysis.detectedText || '';
+      analysis.description = analysis.description || '';
+      analysis.confidence = analysis.confidence || 50;
+
+      // OCR data extraction fields (may be null for non-financial documents)
+      analysis.documentDate = analysis.documentDate || null;
+      analysis.vendorName = analysis.vendorName || null;
+      analysis.amount = analysis.amount || null;
+      analysis.currency = analysis.currency || null;
+      analysis.fullOcrText = analysis.fullOcrText || null;
+
+      // Parse documentDate to Date object if provided
+      if (analysis.documentDate && typeof analysis.documentDate === 'string') {
+        try {
+          analysis.documentDate = new Date(analysis.documentDate);
+          // Validate it's a valid date
+          if (isNaN(analysis.documentDate.getTime())) {
+            console.warn('⚠️  Invalid documentDate, setting to null');
+            analysis.documentDate = null;
           }
+        } catch (dateError) {
+          console.warn('⚠️  Error parsing documentDate:', dateError.message);
+          analysis.documentDate = null;
         }
-      ]
-    }],
-    max_tokens: 1500,
-    response_format: { type: 'json_object' }
-  });
+      }
 
-  const analysis = JSON.parse(visionResponse.choices[0].message.content);
-  console.log(`✅ Vision analysis complete:`);
-  console.log(`   Type: ${analysis.documentType} (${analysis.confidence}% confident)`);
-  console.log(`   Filename: ${analysis.filename}`);
+    } catch (visionError) {
+      console.error('❌ processImage: Vision API error:', visionError);
 
-  // =========================================================================
-  // SMART SAVE LOGIC
-  // =========================================================================
+      // Fallback: Ask user
+      const pending = await createPendingConfirmation({
+        userId,
+        mediaBuffer,
+        mimeType,
+        suggestedFilename: originalName || 'image',
+        documentType: 'photo',
+        confidence: 0,
+        userMessage,
+        isForwarded
+      });
 
-  if (analysis.confidence >= AUTO_SAVE_CONFIDENCE) {
-    // AUTO-SAVE (High confidence)
-    console.log(`💾 High confidence (${analysis.confidence}%) - auto-saving`);
+      return {
+        action: 'ASK',
+        pending: pending,
+        message: `📷 Recibí una imagen pero no pude analizarla automáticamente. ¿Cómo quieres que la guarde?`
+      };
+    }
 
-    const savedFile = await saveImageFile({
-      mediaBuffer,
-      mimeType,
-      originalName,
-      userId,
-      userTitle,
-      analysis,
-      userMessage,
-      isForwarded
-    });
+    console.log(`✅ Vision: ${analysis.documentType} (${analysis.confidence}% confidence)`);
+    console.log(`   Filename: ${analysis.filename}`);
 
+    // =========================================================================
+    // SMART SAVE LOGIC
+    // =========================================================================
+
+    if (analysis.confidence >= AUTO_SAVE_CONFIDENCE) {
+      // AUTO-SAVE (High confidence)
+      console.log(`💾 High confidence (${analysis.confidence}%) - auto-saving`);
+
+      const savedFile = await saveImageFile({
+        mediaBuffer,
+        mimeType,
+        originalName,
+        userId,
+        userTitle,
+        analysis,
+        userMessage,
+        twilioMessageSid,
+        isForwarded
+      });
+
+      return {
+        action: 'SAVED',
+        savedFile: savedFile,
+        analysis: analysis,
+        message: `✅ ${analysis.documentType === 'id_card' ? 'Cédula' : capitalizeFirst(analysis.documentType)} guardada como "${savedFile.filename}".`
+      };
+    } else {
+      // ASK USER (Low confidence)
+      console.log(`❓ Low confidence (${analysis.confidence}%) - asking user`);
+
+      const pending = await createPendingConfirmation({
+        userId,
+        mediaBuffer,
+        mimeType,
+        suggestedFilename: analysis.filename,
+        suggestedDescription: analysis.description,
+        suggestedKeywords: analysis.keywords,
+        detectedText: analysis.detectedText,
+        documentType: analysis.documentType,
+        confidence: analysis.confidence,
+        userMessage,
+        isForwarded
+      });
+
+      return {
+        action: 'ASK',
+        pending: pending,
+        analysis: analysis,
+        message: `📷 Recibí una imagen. Parece ser ${articuloFor(analysis.documentType)} ${analysis.documentType}, pero no estoy seguro (${analysis.confidence}% confianza). ¿Cómo quieres que lo guarde?`
+      };
+    }
+
+  } catch (error) {
+    console.error('❌ processImage: Fatal error:', error);
+    console.error('   Stack:', error.stack);
     return {
-      action: 'SAVED',
-      savedFile: savedFile,
-      analysis: analysis,
-      message: `✅ ${analysis.documentType === 'id_card' ? 'Cédula' : capitalizeFirst(analysis.documentType)} guardada como "${savedFile.filename}". ${analysis.description || ''}`
-    };
-  } else {
-    // ASK USER (Low confidence)
-    console.log(`❓ Low confidence (${analysis.confidence}%) - asking user`);
-
-    const pending = await createPendingConfirmation({
-      userId,
-      mediaBuffer,
-      mimeType,
-      suggestedFilename: analysis.filename,
-      suggestedDescription: analysis.description,
-      suggestedKeywords: analysis.keywords,
-      detectedText: analysis.detectedText,
-      documentType: analysis.documentType,
-      confidence: analysis.confidence,
-      userMessage,
-      isForwarded
-    });
-
-    return {
-      action: 'ASK',
-      pending: pending,
-      analysis: analysis,
-      message: `📷 Recibí una imagen. Parece ser ${analysis.documentType === 'other' ? 'un documento' : articuloFor(analysis.documentType)} ${analysis.documentType}, pero no estoy seguro (${analysis.confidence}% confianza). ¿Cómo quieres que lo guarde?`
+      action: 'ERROR',
+      error: error.message,
+      message: 'Lo siento, hubo un error grave procesando la imagen. Por favor, intenta de nuevo.'
     };
   }
 }
@@ -308,116 +655,305 @@ async function processDocument(options) {
     isForwarded
   } = options;
 
-  console.log(`📄 Document processing: ${mimeType}`);
+  try {
+    // Validate buffer
+    if (!mediaBuffer || !Buffer.isBuffer(mediaBuffer) || mediaBuffer.length === 0) {
+      console.error('❌ processDocument: Invalid buffer');
+      return {
+        action: 'ERROR',
+        error: 'Invalid document buffer',
+        message: 'Lo siento, no pude procesar el documento. Por favor, intenta enviarlo de nuevo.'
+      };
+    }
 
-  // For PDFs and other documents, we can't analyze content easily
-  // So we ask the user
-  const pending = await createPendingConfirmation({
-    userId,
-    mediaBuffer,
-    mimeType,
-    suggestedFilename: originalName || 'document',
-    documentType: 'document',
-    confidence: 50,
-    userMessage,
-    isForwarded
-  });
+    console.log(`📄 Document: ${mimeType} (${mediaBuffer.length} bytes)`);
 
-  return {
-    action: 'ASK',
-    pending: pending,
-    message: `📄 Recibí un documento (${mimeType}). ¿Cómo quieres que lo nombre?`
-  };
+    // Ask user for filename
+    const pending = await createPendingConfirmation({
+      userId,
+      mediaBuffer,
+      mimeType,
+      suggestedFilename: originalName || 'document',
+      documentType: 'document',
+      confidence: 50,
+      userMessage,
+      isForwarded
+    });
+
+    return {
+      action: 'ASK',
+      pending: pending,
+      message: `📄 Recibí un documento (${mimeType}). ¿Cómo quieres que lo nombre?`
+    };
+
+  } catch (error) {
+    console.error('❌ processDocument: Error:', error);
+    console.error('   Stack:', error.stack);
+    return {
+      action: 'ERROR',
+      error: error.message,
+      message: 'Lo siento, hubo un error procesando el documento. Por favor, intenta de nuevo.'
+    };
+  }
 }
 
 /**
- * Save audio file to cloud and MongoDB
+ * Save audio file to R2 and MongoDB
+ * CRITICAL: Upload to R2 FIRST, validate, THEN save to MongoDB
  */
 async function saveAudioFile(data) {
-  const { mediaBuffer, mimeType, originalName, userId, userTitle, transcribedText, filenameSuggestion, confidence } = data;
+  const { mediaBuffer, mimeType, originalName, userId, userTitle, transcribedText, filenameSuggestion, confidence, twilioMessageSid } = data;
 
-  // Upload to cloud storage
-  const uploadResult = await uploadFile(mediaBuffer, {
-    mimeType,
-    originalName,
-    userId,
-    isForwarded: true
-  });
+  try {
+    // Validate inputs
+    if (!mediaBuffer || !userId) {
+      throw new Error('saveAudioFile: Missing required fields (mediaBuffer or userId)');
+    }
 
-  // Save metadata to MongoDB
-  const mediaFile = await saveMediaFile({
-    userId,
-    userTitle,
-    s3Url: uploadResult.url,
-    s3Key: uploadResult.key,
-    filename: filenameSuggestion,
-    description: `Audio: ${transcribedText.substring(0, 200)}`,
-    keywords: extractKeywords(transcribedText),
-    detectedText: transcribedText,
-    documentType: 'audio',
-    confidence,
-    originalName,
-    mimeType,
-    fileSize: uploadResult.size,
-    isForwarded: true
-  });
+    console.log(`💾 saveAudioFile: Starting for "${filenameSuggestion}"`);
 
-  return mediaFile;
+    // =========================================================================
+    // STEP 1: Upload to R2 (MUST SUCCEED FIRST)
+    // =========================================================================
+
+    console.log(`   [1/2] Uploading to R2...`);
+    const uploadResult = await uploadFile(mediaBuffer, {
+      mimeType,
+      originalName: originalName || 'audio.ogg',
+      userId,
+      isForwarded: true
+    });
+
+    // CRITICAL: Validate upload result BEFORE proceeding
+    if (!uploadResult) {
+      throw new Error('R2 upload returned null/undefined');
+    }
+
+    if (!uploadResult.url) {
+      throw new Error('R2 upload missing url field');
+    }
+
+    if (!uploadResult.key) {
+      throw new Error('R2 upload missing key field');
+    }
+
+    console.log(`   ✅ R2 upload complete`);
+    console.log(`      URL: ${uploadResult.url}`);
+    console.log(`      Key: ${uploadResult.key}`);
+
+    // =========================================================================
+    // STEP 2: Save metadata to MongoDB (AFTER R2 upload)
+    // =========================================================================
+
+    console.log(`   [2/2] Saving to MongoDB...`);
+
+    // CRITICAL: Log all values being passed to MongoDB to diagnose undefined issues
+    console.log(`   📊 Validation before MongoDB save:`);
+    console.log(`      ownerPhoneNumber: ${userId} (${typeof userId})`);
+    console.log(`      ownerTitle: ${userTitle} (${typeof userTitle})`);
+    console.log(`      url: ${uploadResult.url} (${typeof uploadResult.url})`);
+    console.log(`      s3Key: ${uploadResult.key} (${typeof uploadResult.key})`);
+    console.log(`      filename: ${filenameSuggestion} (${typeof filenameSuggestion})`);
+    console.log(`      mimeType: ${mimeType} (${typeof mimeType})`);
+
+    // Validate all REQUIRED fields before calling saveMediaFile
+    if (!userId) {
+      throw new Error('Cannot save to MongoDB: userId is undefined or empty');
+    }
+    if (!uploadResult.url) {
+      throw new Error('Cannot save to MongoDB: uploadResult.url is undefined or empty');
+    }
+    if (!uploadResult.key) {
+      throw new Error('Cannot save to MongoDB: uploadResult.key is undefined or empty');
+    }
+    if (!filenameSuggestion) {
+      throw new Error('Cannot save to MongoDB: filenameSuggestion is undefined or empty');
+    }
+    if (!mimeType) {
+      throw new Error('Cannot save to MongoDB: mimeType is undefined or empty');
+    }
+
+    const mediaFile = await saveMediaFile({
+      ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
+      ownerTitle: userTitle,
+      url: uploadResult.url,          // ← REQUIRED from R2 (schema expects 'url', not 's3Url')
+      s3Key: uploadResult.key,        // ← REQUIRED from R2
+      filename: filenameSuggestion,   // ← REQUIRED
+      description: `Audio: ${transcribedText.substring(0, 200)}`,
+      keywords: extractKeywords(transcribedText),
+      detectedText: transcribedText,
+      documentType: 'audio',
+      confidence,
+      originalName: originalName || 'audio.ogg',
+      mimeType,                       // ← REQUIRED
+      fileSize: uploadResult.size,
+      isForwarded: true,
+      twilioMessageSid: twilioMessageSid // ← Link to original Twilio message for reply context
+    });
+
+    console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);
+
+    return mediaFile;
+
+  } catch (error) {
+    console.error('❌ saveAudioFile: Error:', error);
+    console.error('   Stack:', error.stack);
+    throw error; // Re-throw to be caught by caller
+  }
 }
 
 /**
- * Save image file to cloud and MongoDB
+ * Save image file to R2 and MongoDB
+ * CRITICAL: Upload to R2 FIRST, validate, THEN save to MongoDB
  */
 async function saveImageFile(data) {
-  const { mediaBuffer, mimeType, originalName, userId, userTitle, analysis, userMessage, isForwarded } = data;
+  const { mediaBuffer, mimeType, originalName, userId, userTitle, analysis, userMessage, isForwarded, twilioMessageSid } = data;
 
-  // Upload to cloud storage
-  const uploadResult = await uploadFile(mediaBuffer, {
-    mimeType,
-    originalName,
-    userId,
-    isForwarded
-  });
+  try {
+    // Validate inputs
+    if (!mediaBuffer) {
+      throw new Error('saveImageFile: Missing mediaBuffer');
+    }
 
-  // Save metadata to MongoDB
-  const mediaFile = await saveMediaFile({
-    userId,
-    userTitle,
-    s3Url: uploadResult.url,
-    s3Key: uploadResult.key,
-    filename: analysis.filename,
-    description: analysis.description,
-    keywords: analysis.keywords,
-    detectedText: analysis.detectedText,
-    documentType: analysis.documentType,
-    confidence: analysis.confidence,
-    originalName,
-    mimeType,
-    fileSize: uploadResult.size,
-    isForwarded
-  });
+    if (!userId) {
+      throw new Error('saveImageFile: Missing userId');
+    }
 
-  return mediaFile;
+    if (!analysis || !analysis.filename) {
+      throw new Error('saveImageFile: Missing or invalid analysis object');
+    }
+
+    console.log(`💾 saveImageFile: Starting for "${analysis.filename}"`);
+
+    // =========================================================================
+    // STEP 1: Upload to R2 (MUST SUCCEED FIRST)
+    // =========================================================================
+
+    console.log(`   [1/2] Uploading to R2...`);
+    const uploadResult = await uploadFile(mediaBuffer, {
+      mimeType,
+      originalName: originalName || 'image.jpg',
+      userId,
+      isForwarded: isForwarded || false
+    });
+
+    // CRITICAL: Validate upload result BEFORE proceeding
+    if (!uploadResult) {
+      throw new Error('R2 upload returned null/undefined');
+    }
+
+    if (!uploadResult.url) {
+      throw new Error('R2 upload missing url field');
+    }
+
+    if (!uploadResult.key) {
+      throw new Error('R2 upload missing key field');
+    }
+
+    console.log(`   ✅ R2 upload complete`);
+    console.log(`      URL: ${uploadResult.url}`);
+    console.log(`      Key: ${uploadResult.key}`);
+
+    // =========================================================================
+    // STEP 2: Save metadata to MongoDB (AFTER R2 upload)
+    // =========================================================================
+
+    console.log(`   [2/2] Saving to MongoDB...`);
+
+    // CRITICAL: Log all values being passed to MongoDB to diagnose undefined issues
+    console.log(`   📊 Validation before MongoDB save:`);
+    console.log(`      ownerPhoneNumber: ${userId} (${typeof userId})`);
+    console.log(`      ownerTitle: ${userTitle} (${typeof userTitle})`);
+    console.log(`      url: ${uploadResult.url} (${typeof uploadResult.url})`);
+    console.log(`      s3Key: ${uploadResult.key} (${typeof uploadResult.key})`);
+    console.log(`      filename: ${analysis.filename} (${typeof analysis.filename})`);
+    console.log(`      mimeType: ${mimeType} (${typeof mimeType})`);
+
+    // Validate all REQUIRED fields before calling saveMediaFile
+    if (!userId) {
+      throw new Error('Cannot save to MongoDB: userId is undefined or empty');
+    }
+    if (!uploadResult.url) {
+      throw new Error('Cannot save to MongoDB: uploadResult.url is undefined or empty');
+    }
+    if (!uploadResult.key) {
+      throw new Error('Cannot save to MongoDB: uploadResult.key is undefined or empty');
+    }
+    if (!analysis.filename) {
+      throw new Error('Cannot save to MongoDB: analysis.filename is undefined or empty');
+    }
+    if (!mimeType) {
+      throw new Error('Cannot save to MongoDB: mimeType is undefined or empty');
+    }
+
+    const mediaFile = await saveMediaFile({
+      ownerPhoneNumber: userId,       // ← REQUIRED: Owner's phone number
+      ownerTitle: userTitle,
+      url: uploadResult.url,          // ← REQUIRED from R2 (schema expects 'url', not 's3Url')
+      s3Key: uploadResult.key,        // ← REQUIRED from R2
+      filename: analysis.filename,    // ← REQUIRED
+      description: analysis.description || '',
+      keywords: analysis.keywords || [],
+      detectedText: analysis.detectedText || '',
+      documentType: analysis.documentType || 'photo',
+      confidence: analysis.confidence || 0,
+      originalName: originalName || 'image.jpg',
+      mimeType,                       // ← REQUIRED
+      fileSize: uploadResult.size,
+      isForwarded: isForwarded || false,
+
+      // OCR Data Extraction (for receipts, invoices, bills)
+      documentDate: analysis.documentDate || null,
+      vendorName: analysis.vendorName || null,
+      amount: analysis.amount || null,
+      currency: analysis.currency || 'USD',
+      fullOcrText: analysis.fullOcrText || null,
+
+      // Reply Context Linking
+      twilioMessageSid: twilioMessageSid // ← Link to original Twilio message for reply context
+    });
+
+    console.log(`   ✅ MongoDB save complete: ${mediaFile._id}`);
+
+    return mediaFile;
+
+  } catch (error) {
+    console.error('❌ saveImageFile: Error:', error);
+    console.error('   Stack:', error.stack);
+    throw error; // Re-throw to be caught by caller
+  }
 }
 
 /**
  * Create pending confirmation (for low-confidence saves)
  */
 async function createPendingConfirmation(data) {
-  const pending = new PendingConfirmation(data);
-  await pending.save();
-  return pending;
+  try {
+    const pending = new PendingConfirmation(data);
+    await pending.save();
+    console.log(`💾 Pending confirmation created: ${pending._id}`);
+    return pending;
+  } catch (error) {
+    console.error('❌ createPendingConfirmation: Error:', error);
+    console.error('   Stack:', error.stack);
+    throw error;
+  }
 }
 
 /**
  * Generate intelligent filename from audio transcription
  */
 async function generateAudioFilename(transcribedText) {
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [{
-      role: 'user',
-      content: `Generate a short filename (3-5 words max, lowercase, hyphens only, no quotes) for this audio transcription:
+  try {
+    if (!transcribedText || transcribedText.trim().length === 0) {
+      return 'audio-file';
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{
+        role: 'user',
+        content: `Generate a short filename (3-5 words max, lowercase, hyphens only, no quotes) for this audio transcription:
 
 "${transcribedText.substring(0, 300)}"
 
@@ -427,40 +963,54 @@ Examples:
 "Recordatorio para comprar comida" -> "recordatorio-comprar-comida"
 
 Just the filename, nothing else:`
-    }],
-    max_tokens: 15,
-    temperature: 0.3
-  });
+      }],
+      max_tokens: 15,
+      temperature: 0.3
+    });
 
-  return completion.choices[0].message.content.trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-+/g, '-')
-    .substring(0, 50);
+    const filename = completion.choices[0].message.content.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-+/g, '-')
+      .substring(0, 50);
+
+    return filename || 'audio-file';
+
+  } catch (error) {
+    console.error('❌ generateAudioFilename: Error:', error);
+    return 'audio-file'; // Fallback
+  }
 }
 
 /**
  * Extract keywords from text
  */
 function extractKeywords(text) {
-  // Simple keyword extraction (can be improved with NLP)
-  const words = text.toLowerCase()
-    .replace(/[^\w\sáéíóúñü]/g, '')
-    .split(/\s+/)
-    .filter(word => word.length > 3);
+  try {
+    if (!text || typeof text !== 'string') {
+      return [];
+    }
 
-  // Get unique words
-  const unique = [...new Set(words)];
+    const words = text.toLowerCase()
+      .replace(/[^\w\sáéíóúñü]/g, '')
+      .split(/\s+/)
+      .filter(word => word.length > 3);
 
-  // Return top 10
-  return unique.slice(0, 10);
+    const unique = [...new Set(words)];
+
+    return unique.slice(0, 10);
+  } catch (error) {
+    console.error('❌ extractKeywords: Error:', error);
+    return [];
+  }
 }
 
 /**
  * Helper: Capitalize first letter
  */
 function capitalizeFirst(str) {
+  if (!str || typeof str !== 'string') return '';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
@@ -468,10 +1018,77 @@ function capitalizeFirst(str) {
  * Helper: Get Spanish article
  */
 function articuloFor(word) {
-  const femenino = ['cedula', 'factura', 'foto', 'imagen'];
-  return femenino.includes(word) ? 'una' : 'un';
+  if (!word || typeof word !== 'string') return 'un';
+  const femenino = ['cedula', 'factura', 'foto', 'imagen', 'id_card'];
+  return femenino.includes(word.toLowerCase()) ? 'una' : 'un';
+}
+
+/**
+ * Process email attachment (similar to processMedia but for email workflow)
+ * Returns processed media with R2 URL and metadata
+ */
+async function processEmailAttachment(options) {
+  const {
+    attachmentBuffer,
+    filename,
+    mimeType,
+    ownerPhoneNumber,
+    ownerTitle,
+    emailSubject
+  } = options;
+
+  try {
+    console.log(`📧 Processing email attachment: ${filename}`);
+
+    // Call processMedia with the attachment buffer
+    const result = await processMedia({
+      mediaBuffer: attachmentBuffer,
+      mimeType,
+      originalName: filename,
+      ownerPhoneNumber,
+      ownerTitle,
+      userMessage: `Email: ${emailSubject}`,
+      isForwarded: false
+    });
+
+    // For email attachments, we always want to save (not ask)
+    if (result.action === 'SAVED') {
+      // Return the savedFile data in a format compatible with index.js
+      return {
+        url: result.savedFile.url,
+        s3Key: result.savedFile.s3Key,
+        filename: result.savedFile.filename,
+        description: result.savedFile.description,
+        keywords: result.savedFile.keywords,
+        detectedText: result.savedFile.detectedText,
+        documentType: result.savedFile.documentType,
+        confidence: result.savedFile.confidence,
+        fileSize: result.savedFile.fileSize
+      };
+    } else if (result.action === 'ASK') {
+      // For low confidence, use the suggested filename
+      return {
+        url: result.pending.s3Url || '',
+        s3Key: result.pending.s3Key || '',
+        filename: result.pending.suggestedFilename || filename,
+        description: result.pending.suggestedDescription || '',
+        keywords: result.pending.suggestedKeywords || [],
+        detectedText: result.pending.detectedText || '',
+        documentType: result.pending.documentType || 'document',
+        confidence: result.pending.confidence || 0,
+        fileSize: attachmentBuffer.length
+      };
+    } else if (result.action === 'ERROR') {
+      throw new Error(result.error || 'Processing failed');
+    }
+
+  } catch (error) {
+    console.error('❌ processEmailAttachment error:', error);
+    throw error;
+  }
 }
 
 module.exports = {
-  processMedia
+  processMedia,
+  processEmailAttachment
 };
