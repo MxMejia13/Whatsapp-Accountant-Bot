@@ -7,6 +7,7 @@ const { connectMongoDB, getOrCreateUser, saveMediaFile, User, saveMessageToHisto
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
 const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
 const { initScheduler } = require('./services/SchedulerService');
+const { addMessage, getRecentMedia } = require('./utils/conversationContext');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -222,6 +223,47 @@ app.post('/webhook', async (req, res) => {
               body: result.message
             });
 
+          } else if (result.action === 'ANALYZED') {
+            // User asked a question - media analyzed but NOT saved
+            console.log(`🔍 Media analyzed (question mode) - storing in context`);
+
+            // Add to conversation context for follow-up messages
+            addMessage(phoneNumber, {
+              hasMedia: true,
+              mediaType: mimeType,
+              mediaAnalysis: result.analysis,
+              s3Key: result.analysis.s3Key || null,
+              filename: result.analysis.filename
+            });
+
+            // Route to agent with media context
+            try {
+              const history = await getConversationHistory(from, 10);
+
+              const agentResponse = await processAgentMessage({
+                userMessage: incomingMsg,
+                conversationHistory: history,
+                phoneNumber: from,
+                hasMediaAttached: true,
+                mediaType: mimeType,
+                mediaAnalysis: result.analysis,
+                replyContext: null
+              });
+
+              if (agentResponse.success) {
+                await saveMessageToHistory(from, 'user', incomingMsg);
+                await saveMessageToHistory(from, 'assistant', agentResponse.response);
+
+                await twilioClient.messages.create({
+                  from: process.env.TWILIO_WHATSAPP_NUMBER,
+                  to: from,
+                  body: agentResponse.response
+                });
+              }
+            } catch (agentError) {
+              console.error('❌ Error routing analyzed media to Agent:', agentError);
+            }
+
           } else if (result.action === 'ASK') {
             // Low confidence - ask user for confirmation
             console.log(`❓ Low confidence - asking user`);
@@ -318,17 +360,25 @@ app.post('/webhook', async (req, res) => {
     // Handle text messages with AI using AgentService
     if (incomingMsg && incomingMsg.trim()) {
       try {
+        // Check for recent media in conversation context
+        const recentMedia = getRecentMedia(phoneNumber);
+
         // Retrieve conversation history from MongoDB
         const history = await getConversationHistory(from, 10);
+
+        // If there's recent media, the text might be a follow-up question about it
+        if (recentMedia) {
+          console.log(`📎 Found recent media in context (${recentMedia.ageSeconds}s ago) - linking to message`);
+        }
 
         // Process message through AgentService (includes user lookup and context injection)
         const agentResponse = await processAgentMessage({
           userMessage: incomingMsg,
           conversationHistory: history,
           phoneNumber: from,
-          hasMediaAttached: false,
-          mediaType: null,
-          mediaAnalysis: null,
+          hasMediaAttached: recentMedia ? true : false,
+          mediaType: recentMedia ? recentMedia.mediaType : null,
+          mediaAnalysis: recentMedia ? recentMedia.analysis : null,
           replyContext: replyContext // Pass reply context if user is replying to a document/message
         });
 
