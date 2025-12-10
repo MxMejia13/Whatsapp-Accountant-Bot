@@ -483,31 +483,36 @@ app.get('/admin/seed', async (req, res) => {
       {
         phone: '+18096510177',
         alias: 'sr. max',
-        name: 'Max Alejandro Mejia Gonzalez',
+        fullName: 'Max Alejandro Mejia Gonzalez',
+        displayName: 'Max Mejia',
         email: 'mxmejia13@gmail.com'
       },
       {
         phone: '+18098903565',
         alias: 'sr. vinicio',
-        name: 'Vinicio Alfredo Mejia Gonzalez',
+        fullName: 'Vinicio Alfredo Mejia Gonzalez',
+        displayName: 'Vinicio Mejia',
         email: 'viniciomejia5@gmail.com'
       },
       {
         phone: '+18293803443',
         alias: 'sr. sebastian',
-        name: 'Sebastian Andres Mejia Gonzalez',
+        fullName: 'Sebastian Andres Mejia Gonzalez',
+        displayName: 'Sebastian Mejia',
         email: 'sebastianandresmejiagonzalez@gmail.com'
       },
       {
         phone: '+18093833443',
         alias: 'sr. pally',
-        name: 'Vinicio Alfredo Mejia Medina',
+        fullName: 'Vinicio Alfredo Mejia Medina',
+        displayName: 'Vinicio Medina',
         email: 'viniciomejia@yahoo.com'
       },
       {
         phone: '+18292995088',
         alias: 'sr. jose',
-        name: 'Jose Ismael Medina Reyes',
+        fullName: 'Jose Ismael Medina Reyes',
+        displayName: 'Jose Medina',
         email: ''
       }
     ];
@@ -518,10 +523,10 @@ app.get('/admin/seed', async (req, res) => {
       const userDoc = {
         phoneNumber: userData.phone,
         alias: userData.alias,
-        fullName: userData.name,
+        fullName: userData.fullName,
+        name: userData.displayName, // SHORT display name
         email: userData.email || '',
-        title: userData.alias,
-        name: userData.name
+        title: userData.alias
       };
 
       // Remove empty email to avoid validation issues
@@ -533,6 +538,7 @@ app.get('/admin/seed', async (req, res) => {
         { phoneNumber: userData.phone },
         {
           $set: userDoc,
+          $unset: { isAdmin: "" }, // Remove isAdmin field from DB
           $setOnInsert: {
             createdAt: new Date(),
             totalFiles: 0,
