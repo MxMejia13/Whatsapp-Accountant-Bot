@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const twilio = require('twilio');
 const OpenAI = require('openai');
-const { connectMongoDB, getOrCreateUser, saveMediaFile, User, saveMessageToHistory, getConversationHistory } = require('./database/mongodb');
+const { connectMongoDB, getOrCreateUser, saveMediaFile, User, saveMessageToHistory, getConversationHistory, saveMessageToMessageHistory, getMessageByTwilioSid, MediaFile } = require('./database/mongodb');
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
 const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
 const { initScheduler } = require('./services/SchedulerService');
@@ -127,6 +127,113 @@ async function runDiagnostics() {
 }
 
 // ============================================================================
+// ENHANCED REPLY CONTEXT LOOKUP
+// ============================================================================
+
+/**
+ * Get comprehensive reply context for any message (text or media)
+ * Checks: 1) MessageHistory, 2) MediaFile, 3) Twilio API (fallback)
+ */
+async function getEnhancedReplyContext(twilioMessageSid) {
+  if (!twilioMessageSid) {
+    return null;
+  }
+
+  console.log(`🔍 Looking up reply context for: ${twilioMessageSid}`);
+
+  // STEP 1: Check MessageHistory (fastest, includes recent messages)
+  try {
+    const message = await getMessageByTwilioSid(twilioMessageSid);
+
+    if (message) {
+      console.log(`   ✅ Found in MessageHistory: ${message.messageType}`);
+
+      // If it's a media message with populated MediaFile, return full context
+      if (message.mediaFileId) {
+        return {
+          type: 'media',
+          source: 'MessageHistory',
+          fileId: message.mediaFileId._id,
+          filename: message.mediaFileId.filename,
+          documentType: message.mediaFileId.documentType,
+          description: message.mediaFileId.description,
+          detectedText: message.mediaFileId.detectedText,
+          keywords: message.mediaFileId.keywords,
+          documentDate: message.mediaFileId.documentDate,
+          vendorName: message.mediaFileId.vendorName,
+          amount: message.mediaFileId.amount,
+          structuredData: message.mediaFileId.structuredData,
+          createdAt: message.mediaFileId.createdAt
+        };
+      }
+
+      // If it's a text message, return text context
+      if (message.body) {
+        return {
+          type: 'text',
+          source: 'MessageHistory',
+          body: message.body,
+          timestamp: message.timestamp
+        };
+      }
+    }
+  } catch (error) {
+    console.error(`   ❌ Error checking MessageHistory:`, error);
+  }
+
+  // STEP 2: Check MediaFile collection (for older saved media)
+  try {
+    const contextFile = await MediaFile.findOne({ twilioMessageSid: twilioMessageSid });
+
+    if (contextFile) {
+      console.log(`   ✅ Found in MediaFile: ${contextFile.filename}`);
+      return {
+        type: 'media',
+        source: 'MediaFile',
+        fileId: contextFile._id,
+        filename: contextFile.filename,
+        documentType: contextFile.documentType,
+        description: contextFile.description,
+        detectedText: contextFile.detectedText,
+        keywords: contextFile.keywords,
+        documentDate: contextFile.documentDate,
+        vendorName: contextFile.vendorName,
+        amount: contextFile.amount,
+        structuredData: contextFile.structuredData,
+        createdAt: contextFile.createdAt
+      };
+    }
+  } catch (error) {
+    console.error(`   ❌ Error checking MediaFile:`, error);
+  }
+
+  // STEP 3: Fallback to Twilio API (for very old messages or missing data)
+  try {
+    console.log(`   ⏳ Fetching from Twilio API...`);
+    const twilioMessage = await twilioClient.messages(twilioMessageSid).fetch();
+
+    if (twilioMessage) {
+      console.log(`   ✅ Found in Twilio: ${twilioMessage.body ? 'text' : 'media'}`);
+
+      return {
+        type: twilioMessage.body ? 'text' : 'media',
+        source: 'TwilioAPI',
+        body: twilioMessage.body || null,
+        numMedia: twilioMessage.numMedia || 0,
+        timestamp: twilioMessage.dateSent,
+        // Note: Twilio doesn't provide our enhanced analysis, just raw message
+        warning: 'Limited context - fetched from Twilio (no AI analysis available)'
+      };
+    }
+  } catch (error) {
+    console.error(`   ❌ Error fetching from Twilio API:`, error.message);
+  }
+
+  console.log(`   ⚠️  Reply context not found anywhere for: ${twilioMessageSid}`);
+  return null;
+}
+
+// ============================================================================
 // WEBHOOK ENDPOINTS
 // ============================================================================
 
@@ -161,34 +268,10 @@ app.post('/webhook', async (req, res) => {
     // Get or create user in MongoDB
     const user = await getOrCreateUser(phoneNumber);
 
-    // CONTEXTUAL LOOKUP: If user is replying to a previous message, retrieve context
+    // ENHANCED REPLY CONTEXT LOOKUP (MessageHistory → MediaFile → Twilio API)
     let replyContext = null;
     if (originalRepliedMessageSid) {
-      try {
-        const { MediaFile } = require('./database/mongodb');
-        const contextFile = await MediaFile.findOne({ twilioMessageSid: originalRepliedMessageSid });
-
-        if (contextFile) {
-          replyContext = {
-            type: 'file',
-            fileId: contextFile._id,
-            filename: contextFile.filename,
-            description: contextFile.description,
-            documentType: contextFile.documentType,
-            s3Key: contextFile.s3Key,
-            detectedText: contextFile.detectedText,
-            documentDate: contextFile.documentDate,
-            vendorName: contextFile.vendorName,
-            amount: contextFile.amount,
-            createdAt: contextFile.createdAt
-          };
-          console.log(`   ✅ Found reply context: ${contextFile.filename} (${contextFile.documentType})`);
-        } else {
-          console.log(`   ⚠️  Reply context not found for message SID: ${originalRepliedMessageSid}`);
-        }
-      } catch (error) {
-        console.error(`   ❌ Error retrieving reply context:`, error);
-      }
+      replyContext = await getEnhancedReplyContext(originalRepliedMessageSid);
     }
 
     // Process media attachments if present
@@ -226,6 +309,23 @@ app.post('/webhook', async (req, res) => {
               savedToDb: true
             });
 
+            // Save to MessageHistory for reply context
+            await saveMessageToMessageHistory({
+              twilioMessageSid: messageId,
+              phoneNumber,
+              direction: 'incoming',
+              messageType: mimeType.startsWith('image/') ? 'image' :
+                          mimeType.startsWith('audio/') ? 'audio' :
+                          mimeType.startsWith('video/') ? 'video' : 'document',
+              body: incomingMsg,
+              mediaFileId: result.savedFile._id,
+              isReply: !!originalRepliedMessageSid,
+              repliedToMessageSid: originalRepliedMessageSid,
+              numMedia,
+              from,
+              to: process.env.TWILIO_WHATSAPP_NUMBER
+            });
+
             // Send confirmation to user
             await twilioClient.messages.create({
               from: process.env.TWILIO_WHATSAPP_NUMBER,
@@ -244,6 +344,23 @@ app.post('/webhook', async (req, res) => {
               mediaAnalysis: result.analysis,
               s3Key: result.analysis.s3Key || null,
               filename: result.analysis.filename
+            });
+
+            // Save to MessageHistory (media analyzed but not saved to MediaFile)
+            await saveMessageToMessageHistory({
+              twilioMessageSid: messageId,
+              phoneNumber,
+              direction: 'incoming',
+              messageType: mimeType.startsWith('image/') ? 'image' :
+                          mimeType.startsWith('audio/') ? 'audio' :
+                          mimeType.startsWith('video/') ? 'video' : 'document',
+              body: incomingMsg,
+              mediaFileId: null, // Not saved to MediaFile
+              isReply: !!originalRepliedMessageSid,
+              repliedToMessageSid: originalRepliedMessageSid,
+              numMedia,
+              from,
+              to: process.env.TWILIO_WHATSAPP_NUMBER
             });
 
             // Route to agent with media context
@@ -403,10 +520,25 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // Save user message to MongoDB
+        // Save user message to MongoDB (ConversationHistory)
         await saveMessageToHistory(from, 'user', incomingMsg);
 
-        // Save AI response to MongoDB
+        // Save user message to MessageHistory (for reply context)
+        await saveMessageToMessageHistory({
+          twilioMessageSid: messageId,
+          phoneNumber,
+          direction: 'incoming',
+          messageType: 'text',
+          body: incomingMsg,
+          mediaFileId: null,
+          isReply: !!originalRepliedMessageSid,
+          repliedToMessageSid: originalRepliedMessageSid,
+          numMedia: 0,
+          from,
+          to: process.env.TWILIO_WHATSAPP_NUMBER
+        });
+
+        // Save AI response to MongoDB (ConversationHistory)
         await saveMessageToHistory(from, 'assistant', agentResponse.response);
 
         // Send response

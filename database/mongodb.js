@@ -137,6 +137,41 @@ UserSchema.methods.updateLastActive = function() {
 };
 
 /**
+ * MessageHistory Schema
+ * Stores ALL messages (text + media) for complete reply context
+ */
+const MessageHistorySchema = new Schema({
+  // Twilio identifiers
+  twilioMessageSid: { type: String, required: true, unique: true, index: true },
+  phoneNumber: { type: String, required: true, index: true },
+
+  // Message details
+  direction: { type: String, enum: ['incoming', 'outgoing'], required: true },
+  messageType: { type: String, enum: ['text', 'image', 'audio', 'video', 'document'], required: true },
+
+  // Content
+  body: { type: String }, // Text content
+  mediaFileId: { type: Schema.Types.ObjectId, ref: 'MediaFile' }, // Reference to MediaFile if media
+
+  // Reply context
+  isReply: { type: Boolean, default: false },
+  repliedToMessageSid: { type: String, index: true }, // Original message being replied to
+
+  // Metadata
+  numMedia: { type: Number, default: 0 },
+  from: { type: String },
+  to: { type: String },
+
+  // Timestamps
+  timestamp: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Index for efficient lookups
+MessageHistorySchema.index({ phoneNumber: 1, timestamp: -1 });
+MessageHistorySchema.index({ twilioMessageSid: 1 });
+
+/**
  * AccessRequest Schema
  * For the "Permission Handshake" workflow when Admin requests locked files
  */
@@ -220,6 +255,7 @@ ConversationHistorySchema.index({ phoneNumber: 1, createdAt: -1 });
 
 const MediaFile = mongoose.model('MediaFile', MediaFileSchema);
 const User = mongoose.model('User', UserSchema);
+const MessageHistory = mongoose.model('MessageHistory', MessageHistorySchema);
 const AccessRequest = mongoose.model('AccessRequest', AccessRequestSchema);
 const PendingConfirmation = mongoose.model('PendingConfirmation', PendingConfirmationSchema);
 const ConversationHistory = mongoose.model('ConversationHistory', ConversationHistorySchema);
@@ -569,10 +605,78 @@ async function getUserDisplayName(phoneNumber) {
   return phoneNumber;
 }
 
+/**
+ * Save message to MessageHistory (for complete reply context)
+ * @param {Object} messageData - Message data from Twilio webhook
+ * @returns {Promise<Object>} - Saved message document
+ */
+async function saveMessageToMessageHistory(messageData) {
+  const {
+    twilioMessageSid,
+    phoneNumber,
+    direction,
+    messageType,
+    body,
+    mediaFileId,
+    isReply,
+    repliedToMessageSid,
+    numMedia,
+    from,
+    to
+  } = messageData;
+
+  try {
+    const message = new MessageHistory({
+      twilioMessageSid,
+      phoneNumber,
+      direction,
+      messageType,
+      body: body || null,
+      mediaFileId: mediaFileId || null,
+      isReply: isReply || false,
+      repliedToMessageSid: repliedToMessageSid || null,
+      numMedia: numMedia || 0,
+      from,
+      to,
+      timestamp: new Date()
+    });
+
+    await message.save();
+    console.log(`✅ Message saved to MessageHistory: ${twilioMessageSid}`);
+    return message;
+  } catch (error) {
+    // Ignore duplicate key errors (message already saved)
+    if (error.code === 11000) {
+      console.log(`⚠️  Message already exists in MessageHistory: ${twilioMessageSid}`);
+      return null;
+    }
+    console.error('❌ Error saving message to MessageHistory:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get message from MessageHistory by Twilio SID
+ * @param {string} twilioMessageSid - Twilio message SID
+ * @returns {Promise<Object|null>} - Message with populated media file
+ */
+async function getMessageByTwilioSid(twilioMessageSid) {
+  try {
+    const message = await MessageHistory.findOne({ twilioMessageSid })
+      .populate('mediaFileId')
+      .lean();
+    return message;
+  } catch (error) {
+    console.error('❌ Error getting message from MessageHistory:', error);
+    return null;
+  }
+}
+
 module.exports = {
   connectMongoDB,
   MediaFile,
   User,
+  MessageHistory,
   AccessRequest,
   PendingConfirmation,
   saveMediaFile,
@@ -590,6 +694,8 @@ module.exports = {
   saveMessageToHistory,
   getConversationHistory,
   clearConversationHistory,
+  saveMessageToMessageHistory,
+  getMessageByTwilioSid,
   resolveNameToPhone,
   getUserDisplayName
 };
