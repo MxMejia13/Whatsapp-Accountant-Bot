@@ -553,8 +553,12 @@ app.get('/admin/seed', async (req, res) => {
         }
       );
 
-      console.log(`✅ Upserted: ${user.alias} (${user.phoneNumber})`);
-      console.log(`   Full Name: ${user.fullName}, Email: ${user.email}`);
+      // Debug: log the entire user object
+      console.log(`✅ Upserted user:`, JSON.stringify(user, null, 2));
+      console.log(`   Phone: ${user.phoneNumber}`);
+      console.log(`   Alias: ${user.alias}, Title: ${user.title}`);
+      console.log(`   Full Name: ${user.fullName}, Name: ${user.name}`);
+      console.log(`   Email: ${user.email}`);
 
       results.push({
         success: true,
