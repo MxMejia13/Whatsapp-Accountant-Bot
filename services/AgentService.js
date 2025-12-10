@@ -1119,7 +1119,6 @@ async function processMessage(options) {
   console.log(`🔍 Looking up user profile for ${phoneNumber}...`);
 
   let user = null;
-  let isAdmin = false;
 
   try {
     // Extract clean phone number (remove whatsapp: prefix if present)
@@ -1132,9 +1131,6 @@ async function processMessage(options) {
       console.log(`✅ User found: ${user.alias || user.title || user.fullName || 'Unknown'}`);
       console.log(`   Full Name: ${user.fullName || 'N/A'}`);
       console.log(`   Email: ${user.email || 'Not Set'}`);
-      console.log(`   Admin: ${user.isAdmin || false}`);
-
-      isAdmin = user.isAdmin || false;
     } else {
       console.log(`⚠️  User not found in database. Using fallback alias.`);
       // Create a minimal user object for fallback
@@ -1185,7 +1181,7 @@ async function processMessage(options) {
   });
 
   console.log(`🤖 Agent processing message from ${user.alias || phoneNumber}`);
-  console.log(`   Admin: ${isAdmin}, Media: ${hasMediaAttached}, Type: ${mediaType}`);
+  console.log(`   Media: ${hasMediaAttached}, Type: ${mediaType}`);
   console.log(`   Message: "${userMessage?.substring(0, 100)}..."`);
 
   // Tool calling loop

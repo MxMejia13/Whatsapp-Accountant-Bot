@@ -58,13 +58,6 @@ const UserSchema = new Schema({
   name: { type: String }, // For backward compatibility
   title: { type: String }, // For backward compatibility (alias)
 
-  // Authorization
-  isAdmin: {
-    type: Boolean,
-    default: false,
-    index: true
-  },
-
   // Flexible profile data for future extensions
   profileData: {
     type: Object,
@@ -143,10 +136,6 @@ UserSchema.statics.findByPhone = function(phoneNumber) {
 UserSchema.statics.findByEmail = function(email) {
   if (!email) return null;
   return this.findOne({ email: email.toLowerCase() });
-};
-
-UserSchema.statics.getAllAdmins = function() {
-  return this.find({ isAdmin: true });
 };
 
 /**
