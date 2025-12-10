@@ -54,7 +54,7 @@ function getPoliteName(user) {
 /**
  * Build the system prompt with user context
  */
-function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false, replyContext = null) {
+function buildSystemPrompt(user, hasMediaAttached, mediaType, mediaAnalysis, isVoice = false, replyContext = null) {
   // Get polite display name (checks profileData.displayNames first)
   const politeName = getPoliteName(user);
 
@@ -68,10 +68,6 @@ function buildSystemPrompt(user, isAdmin, hasMediaAttached, mediaType, mediaAnal
   } else {
     userContext = '\n\n👤 USER CONTEXT: You are speaking with Estimado Usuario/a. Address the user respectfully.';
   }
-
-  const adminContext = isAdmin
-    ? `\n\n🔐 ADMIN PRIVILEGES: You have admin access. You can search ALL files in the system. Files you don't own will show as LOCKED with metadata only. Use \`request_file_access\` to request permission from the owner.`
-    : '';
 
   const mediaContext = hasMediaAttached && mediaAnalysis
     ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
@@ -98,7 +94,7 @@ ${replyContext.amount ? `- **Amount:** $${replyContext.amount}` : ''}
 **Instructions:** The user's current message is in response to this document. Consider this context when generating your response. If the user is asking about "this" or "that" document, they are referring to the document above.`
     : '';
 
-  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${adminContext}${mediaContext}${voiceContext}${replyContextMessage}
+  return `You are a Privacy-First Intelligent WhatsApp Assistant with expertise in document management and accounting support. You are a helpful, knowledgeable assistant who can answer questions on a wide range of topics.${userContext}${mediaContext}${voiceContext}${replyContextMessage}
 
 ## CORE CAPABILITIES:
 - **PRIMARY FOCUS:** Document management, file storage, and accounting support
@@ -1155,7 +1151,6 @@ async function processMessage(options) {
   // Build system prompt with user context
   const systemPrompt = buildSystemPrompt(
     user,
-    isAdmin,
     hasMediaAttached,
     mediaType,
     mediaAnalysis,

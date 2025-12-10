@@ -572,8 +572,7 @@ app.get('/admin/seed', async (req, res) => {
         phone: userObj.phoneNumber,
         email: userObj.email || 'N/A',
         name: userObj.name,
-        title: userObj.title,
-        isAdminRemoved: !userObj.hasOwnProperty('isAdmin')
+        title: userObj.title
       });
     }
 
