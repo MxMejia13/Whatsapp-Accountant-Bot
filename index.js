@@ -216,6 +216,16 @@ app.post('/webhook', async (req, res) => {
             // File was successfully saved by processMedia
             console.log(`✅ Media processed and saved: ${result.savedFile.filename}`);
 
+            // Add to conversation context for follow-up messages
+            addMessage(phoneNumber, {
+              hasMedia: true,
+              mediaType: mimeType,
+              mediaAnalysis: result.analysis,
+              s3Key: result.savedFile.s3Key || result.analysis.s3Key,
+              filename: result.savedFile.filename,
+              savedToDb: true
+            });
+
             // Send confirmation to user
             await twilioClient.messages.create({
               from: process.env.TWILIO_WHATSAPP_NUMBER,
