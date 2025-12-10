@@ -595,6 +595,71 @@ app.get('/admin/seed', async (req, res) => {
   }
 });
 
+// Fix corrupted dates from manual MongoDB edits
+app.get('/admin/fix-dates', async (req, res) => {
+  try {
+    console.log('\n🔧 Fixing corrupted date fields...\n');
+
+    const collection = mongoose.connection.collection('users');
+
+    // Find all users with corrupted dates
+    const users = await collection.find({}).toArray();
+
+    const fixed = [];
+
+    for (const user of users) {
+      const updates = {};
+
+      // Fix createdAt if it's an object with $date
+      if (user.createdAt && typeof user.createdAt === 'object' && user.createdAt.$date) {
+        updates.createdAt = new Date(user.createdAt.$date);
+      }
+
+      // Fix lastActive if it's an object with $date
+      if (user.lastActive && typeof user.lastActive === 'object' && user.lastActive.$date) {
+        updates.lastActive = new Date(user.lastActive.$date);
+      }
+
+      // Fix v2LaunchNotifiedAt if it exists and is corrupted
+      if (user.v2LaunchNotifiedAt && typeof user.v2LaunchNotifiedAt === 'object' && user.v2LaunchNotifiedAt.$date) {
+        updates.v2LaunchNotifiedAt = new Date(user.v2LaunchNotifiedAt.$date);
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await collection.updateOne(
+          { _id: user._id },
+          { $set: updates }
+        );
+
+        fixed.push({
+          phone: user.phoneNumber,
+          alias: user.alias,
+          fixedFields: Object.keys(updates)
+        });
+
+        console.log(`✅ Fixed dates for ${user.alias || user.phoneNumber}`);
+      }
+    }
+
+    console.log(`\n✅ Fixed ${fixed.length} users\n`);
+
+    res.json({
+      success: true,
+      message: `Fixed date fields for ${fixed.length} users`,
+      fixed: fixed,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Fix dates error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // ============================================================================
 // STARTUP SEQUENCE
 // ============================================================================
