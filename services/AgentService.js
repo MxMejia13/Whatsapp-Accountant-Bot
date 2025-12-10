@@ -386,13 +386,11 @@ When user wants to share/send a file:
    - **STEP 2:** Call \`send_email\` with the filename
    - **Do this automatically** - don't ask permission for each step
    - Example flow:
-     ```
      User: [sends receipt] "¿Cuánto pagué?"
      You: "Pagaste $45.67. ¿Quieres que guarde este recibo?"
      User: "No, solo envíaselo a Vinicio"
      You: Call save_file() → Call send_email(recipientEmail: "Vinicio", ...)
      Response: "✅ Recibo guardado y enviado a Vinicio!"
-     ```
 
 3. **File needs to be found** → Call \`search_files\` first, then send
 
