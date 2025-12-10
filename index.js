@@ -534,11 +534,17 @@ app.get('/admin/seed', async (req, res) => {
         delete userDoc.email;
       }
 
+      // First remove isAdmin field
+      await User.updateOne(
+        { phoneNumber: userData.phone },
+        { $unset: { isAdmin: 1 } }
+      );
+
+      // Then upsert the user data
       const user = await User.findOneAndUpdate(
         { phoneNumber: userData.phone },
         {
           $set: userDoc,
-          $unset: { isAdmin: "" }, // Remove isAdmin field from DB
           $setOnInsert: {
             createdAt: new Date(),
             totalFiles: 0,
@@ -553,27 +559,21 @@ app.get('/admin/seed', async (req, res) => {
         }
       );
 
-      // Debug: log the entire user object
-      console.log(`✅ Upserted user:`, JSON.stringify(user, null, 2));
-      console.log(`   Phone: ${user.phoneNumber}`);
-      console.log(`   Alias: ${user.alias}, Title: ${user.title}`);
-      console.log(`   Full Name: ${user.fullName}, Name: ${user.name}`);
-      console.log(`   Email: ${user.email}`);
+      // Convert to plain object to access fields properly
+      const userObj = user.toObject();
+
+      console.log(`✅ Upserted: ${userObj.alias} (${userObj.phoneNumber})`);
+      console.log(`   Full Name: ${userObj.fullName}, Email: ${userObj.email}`);
 
       results.push({
         success: true,
-        alias: user.alias,
-        fullName: user.fullName,
-        phone: user.phoneNumber,
-        email: user.email || 'N/A',
-        // Debug: show all saved fields
-        debug: {
-          alias: user.alias,
-          fullName: user.fullName,
-          email: user.email,
-          name: user.name,
-          title: user.title
-        }
+        alias: userObj.alias,
+        fullName: userObj.fullName,
+        phone: userObj.phoneNumber,
+        email: userObj.email || 'N/A',
+        name: userObj.name,
+        title: userObj.title,
+        isAdminRemoved: !userObj.hasOwnProperty('isAdmin')
       });
     }
 
