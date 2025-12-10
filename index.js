@@ -473,6 +473,108 @@ app.get('/status', (req, res) => {
   });
 });
 
+// Admin endpoint to seed/update user data
+app.get('/admin/seed', async (req, res) => {
+  try {
+    console.log('\n🌱 Admin seed endpoint triggered\n');
+
+    // Master User List
+    const USERS = [
+      {
+        phone: '+18096510177',
+        alias: 'sr. max',
+        name: 'Max Alejandro Mejia Gonzalez',
+        email: 'mxmejia13@gmail.com'
+      },
+      {
+        phone: '+18098903565',
+        alias: 'sr. vinicio',
+        name: 'Vinicio Alfredo Mejia Gonzalez',
+        email: 'viniciomejia5@gmail.com'
+      },
+      {
+        phone: '+18293803443',
+        alias: 'sr. sebastian',
+        name: 'Sebastian Andres Mejia Gonzalez',
+        email: 'sebastianandresmejiagonzalez@gmail.com'
+      },
+      {
+        phone: '+18093833443',
+        alias: 'sr. pally',
+        name: 'Vinicio Alfredo Mejia Medina',
+        email: 'viniciomejia@yahoo.com'
+      },
+      {
+        phone: '+18292995088',
+        alias: 'sr. jose',
+        name: 'Jose Ismael Medina Reyes',
+        email: ''
+      }
+    ];
+
+    const results = [];
+
+    for (const userData of USERS) {
+      const userDoc = {
+        phoneNumber: userData.phone,
+        alias: userData.alias,
+        fullName: userData.name,
+        email: userData.email || '',
+        title: userData.alias,
+        name: userData.name
+      };
+
+      // Remove empty email to avoid validation issues
+      if (!userDoc.email) {
+        delete userDoc.email;
+      }
+
+      const user = await User.findOneAndUpdate(
+        { phoneNumber: userData.phone },
+        {
+          $set: userDoc,
+          $setOnInsert: {
+            createdAt: new Date(),
+            totalFiles: 0,
+            totalMessages: 0,
+            preferences: {}
+          }
+        },
+        {
+          upsert: true,
+          new: true,
+          runValidators: true
+        }
+      );
+
+      console.log(`✅ Upserted: ${user.alias} (${user.phoneNumber})`);
+      results.push({
+        success: true,
+        alias: user.alias,
+        phone: user.phoneNumber,
+        email: user.email || 'N/A'
+      });
+    }
+
+    console.log(`\n✅ Successfully seeded ${results.length} users\n`);
+
+    res.json({
+      success: true,
+      message: `Successfully seeded ${results.length} users`,
+      users: results,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Seed endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // ============================================================================
 // STARTUP SEQUENCE
 // ============================================================================
