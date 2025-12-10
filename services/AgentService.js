@@ -861,7 +861,7 @@ async function executeTool(toolName, args, context) {
         }
 
         try {
-          const nodemailer = require('nodemailer');
+          const sgMail = require('@sendgrid/mail');
           const { getSignedUrl } = require('./CloudStorage');
 
           // ===============================================
@@ -975,53 +975,24 @@ async function executeTool(toolName, args, context) {
           }
 
           // ===============================================
-          // SMTP CONFIGURATION (Fixed for ETIMEDOUT)
+          // SENDGRID HTTP API CONFIGURATION
           // ===============================================
-          const smtpPort = parseInt(process.env.SMTP_PORT) || 587;
-          const isSecurePort = smtpPort === 465;
-
-          const transportConfig = {
-            host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: smtpPort,
-            secure: isSecurePort, // true for 465, false for other ports
-            auth: {
-              user: process.env.SMTP_USER || process.env.SMTP_EMAIL,
-              pass: process.env.SMTP_PASS
-            },
-            // Force IPv4 to prevent IPv6/IPv4 protocol conflicts
-            family: 4,
-            // Use connection pooling to resolve sporadic timeouts
-            pool: true,
-            // Enhanced connection settings to fix ETIMEDOUT
-            connectionTimeout: 10000, // 10 seconds
-            greetingTimeout: 10000,
-            socketTimeout: 10000
-          };
-
-          // Add TLS configuration for port 587 (STARTTLS)
-          if (!isSecurePort) {
-            transportConfig.tls = {
-              rejectUnauthorized: false, // Accept self-signed certificates (for development)
-              minVersion: 'TLSv1.2' // Use modern TLS (Resend compatible)
-            };
-            transportConfig.requireTLS = true; // Force STARTTLS upgrade
-          } else {
-            // Port 465: Direct SSL/TLS - still allow self-signed certs
-            transportConfig.tls = {
-              rejectUnauthorized: false,
-              minVersion: 'TLSv1.2'
+          if (!process.env.SENDGRID_API_KEY) {
+            console.error('❌ SENDGRID_API_KEY not configured');
+            return {
+              success: false,
+              error: 'Email service not configured. Please set SENDGRID_API_KEY environment variable.'
             };
           }
 
-          console.log(`📧 Configuring SMTP: ${transportConfig.host}:${transportConfig.port} (secure: ${transportConfig.secure})`);
-
-          const transporter = nodemailer.createTransport(transportConfig);
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          console.log(`📧 Using SendGrid HTTP API`);
 
           // ===============================================
           // COMPOSE EMAIL WITH ATTACHMENT LINK
           // ===============================================
           const mailOptions = {
-            from: process.env.SMTP_FROM || process.env.SMTP_EMAIL,
+            from: process.env.SENDGRID_FROM || process.env.SMTP_FROM || 'bot@mejiafamily.app',
             to: resolvedEmail,
             subject: subject,
             text: body,
@@ -1064,21 +1035,21 @@ async function executeTool(toolName, args, context) {
           }
 
           // ===============================================
-          // SEND EMAIL
+          // SEND EMAIL VIA SENDGRID HTTP API
           // ===============================================
-          console.log(`📤 Sending email to ${resolvedEmail}...`);
-          const info = await transporter.sendMail(mailOptions);
+          console.log(`📤 Sending email to ${resolvedEmail} via SendGrid HTTP API...`);
+          const response = await sgMail.send(mailOptions);
 
           console.log(`✅ Email sent successfully!`);
           console.log(`   To: ${resolvedEmail}${resolvedAlias ? ` (${resolvedAlias})` : ''}`);
           console.log(`   Subject: ${subject}`);
-          console.log(`   Message ID: ${info.messageId}`);
+          console.log(`   SendGrid Response: ${response[0].statusCode}`);
           console.log(`   Attachment: ${resolvedS3Key ? 'Yes' : 'No'}`);
 
           return {
             success: true,
             message: `Email sent successfully to ${resolvedEmail}${resolvedAlias ? ` (${resolvedAlias})` : ''}`,
-            messageId: info.messageId,
+            messageId: response[0].headers['x-message-id'] || 'sent',
             recipient: resolvedEmail,
             recipientAlias: resolvedAlias,
             attachmentIncluded: !!resolvedS3Key,
@@ -1086,17 +1057,22 @@ async function executeTool(toolName, args, context) {
           };
         } catch (error) {
           console.error('❌ Error sending email:', error);
-          console.error('   Error code:', error.code);
-          console.error('   Error message:', error.message);
+
+          // SendGrid errors have a different structure
+          if (error.response) {
+            console.error('   SendGrid Error Code:', error.code);
+            console.error('   SendGrid Response:', error.response.body);
+          } else {
+            console.error('   Error message:', error.message);
+          }
 
           // Provide helpful error messages
           let errorMessage = error.message;
-          if (error.code === 'ETIMEDOUT') {
-            errorMessage = 'SMTP connection timeout. Please check your SMTP_HOST, SMTP_PORT, and network connectivity. Ensure firewall allows outbound connections on the SMTP port.';
-          } else if (error.code === 'EAUTH') {
-            errorMessage = 'SMTP authentication failed. Please verify SMTP_USER and SMTP_PASS are correct.';
-          } else if (error.code === 'ECONNREFUSED') {
-            errorMessage = 'SMTP connection refused. Please verify SMTP_HOST and SMTP_PORT are correct.';
+          if (error.response && error.response.body) {
+            const body = error.response.body;
+            if (body.errors && body.errors.length > 0) {
+              errorMessage = body.errors.map(e => e.message).join('; ');
+            }
           }
 
           return {
