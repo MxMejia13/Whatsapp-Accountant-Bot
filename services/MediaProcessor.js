@@ -27,6 +27,69 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const AUTO_SAVE_CONFIDENCE = 80;
 
 /**
+ * Detect if user is asking a question vs wanting to save
+ * Returns true if user is asking about the media (ANALYZE mode)
+ * Returns false if user wants to save (SAVE mode) or sent no message
+ */
+function detectQuestionIntent(userMessage) {
+  if (!userMessage || typeof userMessage !== 'string') {
+    return false; // No message = default to SAVE mode
+  }
+
+  const msg = userMessage.toLowerCase().trim();
+
+  // Question indicators (Spanish and English)
+  const questionPatterns = [
+    /qu[eé]\s+(dice|es|hay|aparece|muestra|contiene|pone|sale|significa)/i, // qué dice, qué es, qué hay
+    /cu[aá]nto/i, // cuánto
+    /cu[aá]ndo/i, // cuándo
+    /c[oó]mo/i, // cómo
+    /d[oó]nde/i, // dónde
+    /qui[eé]n/i, // quién
+    /por\s+qu[eé]/i, // por qué
+    /extrae|extraer/i, // extrae las fechas
+    /lee|leer/i, // lee esto
+    /analiza|analizar/i, // analiza esto
+    /dime|decir/i, // dime qué dice
+    /muestra|mostrar/i, // muestra las fechas
+    /lista|listar/i, // lista los items
+    /identifica|identificar/i, // identifica qué es
+    /what\s+(is|does|says|appears)/i, // what is this
+    /how\s+much/i, // how much
+    /can\s+you\s+(tell|read|extract)/i, // can you tell me
+    /extract|read|analyze|identify/i // extract, read, analyze
+  ];
+
+  // Check if message matches question patterns
+  for (const pattern of questionPatterns) {
+    if (pattern.test(msg)) {
+      return true;
+    }
+  }
+
+  // Check for question marks
+  if (msg.includes('?')) {
+    return true;
+  }
+
+  // Check for explicit "don't save" commands
+  const dontSavePatterns = [
+    /no\s+(lo\s+)?guard(es|ar)/i, // no lo guardes, no guardar
+    /solo\s+(analiza|lee|extrae)/i, // solo analiza, solo lee
+    /don't\s+save/i,
+    /just\s+(analyze|read|extract)/i
+  ];
+
+  for (const pattern of dontSavePatterns) {
+    if (pattern.test(msg)) {
+      return true;
+    }
+  }
+
+  return false; // Default to SAVE mode
+}
+
+/**
  * Download media from Twilio with proper authentication
  * Twilio requires Basic Auth to access protected media files
  *
@@ -579,6 +642,25 @@ IMPORTANT:
 
     console.log(`✅ Vision: ${analysis.documentType} (${analysis.confidence}% confidence)`);
     console.log(`   Filename: ${analysis.filename}`);
+
+    // =========================================================================
+    // USER INTENT DETECTION
+    // =========================================================================
+
+    // Detect if user is asking a question (wants to ANALYZE) vs wants to SAVE
+    const isQuestion = detectQuestionIntent(userMessage);
+
+    if (isQuestion) {
+      console.log(`❓ User is asking a question - ANALYZE mode (won't save)`);
+
+      // Return analysis WITHOUT saving
+      return {
+        action: 'ANALYZED',
+        analysis: analysis,
+        message: null, // Let agent handle response
+        skipSave: true
+      };
+    }
 
     // =========================================================================
     // SMART SAVE LOGIC
