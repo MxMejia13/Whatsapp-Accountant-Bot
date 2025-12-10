@@ -548,11 +548,22 @@ app.get('/admin/seed', async (req, res) => {
       );
 
       console.log(`✅ Upserted: ${user.alias} (${user.phoneNumber})`);
+      console.log(`   Full Name: ${user.fullName}, Email: ${user.email}`);
+
       results.push({
         success: true,
         alias: user.alias,
+        fullName: user.fullName,
         phone: user.phoneNumber,
-        email: user.email || 'N/A'
+        email: user.email || 'N/A',
+        // Debug: show all saved fields
+        debug: {
+          alias: user.alias,
+          fullName: user.fullName,
+          email: user.email,
+          name: user.name,
+          title: user.title
+        }
       });
     }
 
