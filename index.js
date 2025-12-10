@@ -7,7 +7,7 @@ const { connectMongoDB, getOrCreateUser, saveMediaFile, User, saveMessageToHisto
 const { processMedia, processEmailAttachment } = require('./services/MediaProcessor');
 const { processMessage: processAgentMessage, sendWhatsAppMessage } = require('./services/AgentService');
 const { initScheduler } = require('./services/SchedulerService');
-const { addMessage, getRecentMedia } = require('./utils/conversationContext');
+const { addMessage, getRecentMedia, setPendingExtraction, getPendingExtraction } = require('./utils/conversationContext');
 
 const app = express();
 const PORT = process.env.PORT || 3000;

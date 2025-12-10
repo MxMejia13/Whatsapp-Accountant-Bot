@@ -102,8 +102,62 @@ function getContext(phoneNumber) {
 
   return {
     messages: context.messages,
-    lastActivity: context.lastActivity
+    lastActivity: context.lastActivity,
+    pendingExtraction: context.pendingExtraction || null
   };
+}
+
+/**
+ * Store pending extraction data (when clarification needed)
+ */
+function setPendingExtraction(phoneNumber, extractionData) {
+  if (!userContexts.has(phoneNumber)) {
+    userContexts.set(phoneNumber, {
+      messages: [],
+      lastActivity: Date.now()
+    });
+  }
+
+  const context = userContexts.get(phoneNumber);
+  context.pendingExtraction = {
+    ...extractionData,
+    timestamp: Date.now()
+  };
+  context.lastActivity = Date.now();
+}
+
+/**
+ * Get pending extraction data (if exists and not expired)
+ */
+function getPendingExtraction(phoneNumber) {
+  if (!userContexts.has(phoneNumber)) {
+    return null;
+  }
+
+  const context = userContexts.get(phoneNumber);
+  if (!context.pendingExtraction) {
+    return null;
+  }
+
+  const now = Date.now();
+  // Check if extraction is still fresh (within timeout)
+  if ((now - context.pendingExtraction.timestamp) > CONTEXT_TIMEOUT_MS) {
+    // Expired
+    context.pendingExtraction = null;
+    return null;
+  }
+
+  return context.pendingExtraction;
+}
+
+/**
+ * Clear pending extraction
+ */
+function clearPendingExtraction(phoneNumber) {
+  if (userContexts.has(phoneNumber)) {
+    const context = userContexts.get(phoneNumber);
+    context.pendingExtraction = null;
+  }
 }
 
 /**
@@ -133,5 +187,8 @@ module.exports = {
   addMessage,
   getRecentMedia,
   getContext,
-  clearContext
+  clearContext,
+  setPendingExtraction,
+  getPendingExtraction,
+  clearPendingExtraction
 };

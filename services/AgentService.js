@@ -69,9 +69,38 @@ function buildSystemPrompt(user, hasMediaAttached, mediaType, mediaAnalysis, isV
     userContext = '\n\n👤 USER CONTEXT: You are speaking with Estimado Usuario/a. Address the user respectfully.';
   }
 
-  const mediaContext = hasMediaAttached && mediaAnalysis
-    ? `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`
-    : '';
+  // Build media context with structured extraction data if available
+  let mediaContext = '';
+  if (hasMediaAttached && mediaAnalysis) {
+    mediaContext = `\n\n📎 MEDIA CONTEXT: The user sent a ${mediaType} file. AI Analysis:\n${mediaAnalysis.description || 'No description'}\nKeywords: ${mediaAnalysis.keywords ? mediaAnalysis.keywords.join(', ') : 'none'}\nDocument Type: ${mediaAnalysis.documentType || 'unknown'}\nConfidence: ${mediaAnalysis.confidence || 0}%`;
+
+    // Add structured extraction data if available
+    if (mediaAnalysis.allDates && mediaAnalysis.allDates.length > 0) {
+      mediaContext += `\n\n📅 DATES FOUND IN DOCUMENT:`;
+      mediaAnalysis.allDates.forEach((dateInfo, idx) => {
+        mediaContext += `\n  ${idx + 1}. ${dateInfo.date} - ${dateInfo.context} (${dateInfo.confidence}% confidence)`;
+      });
+    }
+
+    if (mediaAnalysis.allAmounts && mediaAnalysis.allAmounts.length > 0) {
+      mediaContext += `\n\n💰 AMOUNTS FOUND:`;
+      mediaAnalysis.allAmounts.forEach((amtInfo, idx) => {
+        mediaContext += `\n  ${idx + 1}. $${amtInfo.amount} - ${amtInfo.context} (${amtInfo.confidence}% confidence)`;
+      });
+    }
+
+    if (mediaAnalysis.extractedFields && Object.keys(mediaAnalysis.extractedFields).length > 0) {
+      mediaContext += `\n\n📊 EXTRACTED FIELDS:\n${JSON.stringify(mediaAnalysis.extractedFields, null, 2)}`;
+    }
+
+    // Clarification instructions
+    if (mediaAnalysis.needsClarification) {
+      mediaContext += `\n\n⚠️ CLARIFICATION NEEDED: Some data is ambiguous. Ask the user to clarify before saving.`;
+      if (mediaAnalysis.clarificationQuestions && mediaAnalysis.clarificationQuestions.length > 0) {
+        mediaContext += `\nSuggested questions:\n${mediaAnalysis.clarificationQuestions.map(q => `- ${q}`).join('\n')}`;
+      }
+    }
+  }
 
   const voiceContext = isVoice
     ? `\n\n🎤 VOICE INPUT: The user's message was transcribed from an audio note using Whisper AI. You successfully received and understood their voice message. Respond naturally and conversationally, acknowledging the spoken nature of their request. If they ask whether you can "read", "hear", "understand", or "process" audio/voice notes, confirm that YES, you can transcribe and understand voice messages perfectly.`
@@ -209,6 +238,67 @@ When user wants to find a file:
      * "¿Qué hora es?" → Call \`get_current_time\`, respond with formatted time
      * "¿Cuántos días faltan para Navidad?" → Call \`get_current_time\`, calculate difference
      * "¿Cuántos años tiene alguien nacido en 1990?" → Call \`get_current_time\`, calculate age
+
+## INTERACTIVE STRUCTURED EXTRACTION:
+
+When the system extracts comprehensive data from documents (invoices, receipts, bills), you'll see:
+- **DATES FOUND**: All dates with context and confidence scores
+- **AMOUNTS FOUND**: All monetary values with labels
+- **EXTRACTED FIELDS**: Structured data (invoiceNumber, issueDate, dueDate, etc.)
+- **CLARIFICATION NEEDED**: Flag indicating ambiguous data
+
+### How to Handle Extraction:
+
+**If needsClarification = false** (high confidence):
+1. Present the extracted data clearly
+2. Ask if user wants to save it
+3. Call \`save_file\` when confirmed
+
+**If needsClarification = true** (ambiguous data):
+1. **Show what you found:** List all dates/amounts clearly
+2. **Ask clarifying questions:** Be specific about what you need to know
+3. **Be conversational:** Use natural language, not rigid forms
+4. **Collect information:** Through back-and-forth dialogue
+5. **Save when ready:** Call \`save_file\` once all data is clarified
+
+### Interactive Extraction Examples:
+
+**Scenario 1: Clear Invoice**
+User: [sends invoice] "Guárdalo"
+System: extractedFields = {invoiceNumber: "INV-001", issueDate: "2024-12-01", dueDate: "2024-12-15", total: 1234.56}
+You: "Perfecto! Encontré la factura INV-001 de fecha 01/12/2024, vence el 15/12/2024, por un total de $1,234.56. ¿Guardo esta información?"
+User: "Sí"
+You: Call \`save_file\` → Saves with all structured data
+
+**Scenario 2: Ambiguous Dates**
+User: [sends invoice] "Extrae los datos"
+System: allDates = [
+  {date: "2024-12-01", context: "top right", confidence: 60},
+  {date: "2024-12-15", context: "bottom section", confidence: 55},
+  {date: "2024-12-30", context: "near signature", confidence: 45}
+]
+You: "Encontré 3 fechas en esta factura:
+1. 01/12/2024 (arriba a la derecha)
+2. 15/12/2024 (sección inferior)
+3. 30/12/2024 (cerca de la firma)
+
+¿Cuál es la fecha de emisión de la factura?"
+User: "La primera"
+You: "Perfecto, 01/12/2024 es la fecha de emisión. ¿Y cuál es la fecha de vencimiento?"
+User: "La del 30"
+You: "Entendido! Factura emitida el 01/12/2024, vence el 30/12/2024. ¿Guardo estos datos?"
+User: "Sí"
+You: Call \`save_file\` → Saves with clarified structured data
+
+**Scenario 3: Multiple Items**
+User: [sends receipt] "Qué compré?"
+System: allAmounts = [{amount: 10.00, context: "Item 1"}, {amount: 35.67, context: "Item 2"}, {amount: 45.67, context: "Total"}]
+You: "En este recibo compraste:
+• Item 1: $10.00
+• Item 2: $35.67
+Total: $45.67
+
+¿Quieres que guarde este recibo?"
 
 ## EXAMPLES:
 
@@ -450,7 +540,7 @@ async function executeTool(toolName, args, context) {
         // Use custom name if provided, otherwise use AI-generated filename
         const filename = custom_name || mediaAnalysis.filename;
 
-        // Save to MongoDB with full metadata
+        // Save to MongoDB with full metadata including structured data
         const savedFile = await saveMediaFile({
           ownerPhoneNumber: phoneNumber,
           ownerTitle: user?.alias || user?.title || phoneNumber,
@@ -465,7 +555,15 @@ async function executeTool(toolName, args, context) {
           originalName: mediaAnalysis.originalName,
           mimeType: mediaAnalysis.mimeType,
           fileSize: mediaAnalysis.fileSize,
-          isForwarded: mediaAnalysis.isForwarded || false
+          isForwarded: mediaAnalysis.isForwarded || false,
+          // Document extraction fields
+          documentDate: mediaAnalysis.documentDate || null,
+          vendorName: mediaAnalysis.vendorName || null,
+          amount: mediaAnalysis.amount || null,
+          currency: mediaAnalysis.currency || 'USD',
+          fullOcrText: mediaAnalysis.fullOcrText || null,
+          // Structured data (comprehensive extraction)
+          structuredData: mediaAnalysis.extractedFields || {}
         });
 
         console.log(`✅ File saved to MongoDB: ${savedFile._id}`);

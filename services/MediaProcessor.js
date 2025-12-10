@@ -529,7 +529,7 @@ async function processImage(options) {
           content: [
             {
               type: 'text',
-              text: `Analyze this image in detail. You are a document analysis AI with OCR and data extraction capabilities.
+              text: `Analyze this image in detail. You are a document analysis AI with OCR and comprehensive data extraction capabilities.
 
 TASK:
 1. Identify the document type (passport, ID card, receipt, invoice, contract, photo, etc.)
@@ -538,34 +538,69 @@ TASK:
 4. Generate 5-10 search keywords
 5. Write a brief description
 6. Rate your confidence (0-100%) about what this document is
-7. **EXTRACT STRUCTURED DATA** (for receipts, invoices, bills):
-   - documentDate: Date on the document (ISO 8601 format: YYYY-MM-DD)
-   - vendorName: Business/merchant name
-   - amount: Total amount (number only, no currency symbols)
-   - currency: Currency code (USD, DOP, EUR, etc.)
+7. **EXTRACT ALL STRUCTURED DATA** with labels and context:
+
+FOR INVOICES/BILLS:
+   - Find ALL dates and identify what each represents (issue date, due date, service date, etc.)
+   - Extract invoice number, vendor info, amounts (subtotal, tax, total)
+   - Note any ambiguities or multiple values that need clarification
+
+FOR RECEIPTS:
+   - Purchase date, merchant name, total amount, payment method
+   - Individual line items if clearly visible
+
+FOR ALL DOCUMENTS:
    - fullOcrText: Complete raw text exactly as it appears
+   - allDates: List ALL dates found with context (e.g., "2024-12-01 (next to 'Invoice Date:')")
+   - allAmounts: List ALL amounts found with context
 
 FORMAT YOUR RESPONSE AS JSON:
 {
-  "documentType": "passport" | "id_card" | "receipt" | "invoice" | "contract" | "bill" | "photo" | "screenshot" | "other",
-  "filename": "receipt-walmart-2024-12-09",
-  "description": "Walmart receipt for grocery purchase, total $45.67",
-  "keywords": ["receipt", "walmart", "grocery", "purchase", "food"],
+  "documentType": "invoice" | "receipt" | "bill" | "id_card" | "passport" | "contract" | "photo" | "other",
+  "filename": "invoice-acme-dec-2024",
+  "description": "Invoice from Acme Corp, issued Dec 1, due Dec 15, total $1,234.56",
+  "keywords": ["invoice", "acme", "billing", "payment"],
   "detectedText": "Summary of main content...",
   "confidence": 95,
-  "documentDate": "2024-12-09",
-  "vendorName": "Walmart",
-  "amount": 45.67,
+
+  "documentDate": "2024-12-01",
+  "vendorName": "Acme Corp",
+  "amount": 1234.56,
   "currency": "USD",
-  "fullOcrText": "WALMART\\nStore #1234\\nDate: 12/09/2024\\nTime: 14:30\\nItem 1: $10.00\\nItem 2: $35.67\\nTotal: $45.67\\nThank you!"
+  "fullOcrText": "ACME CORP\\nInvoice #INV-001\\nIssue Date: 12/01/2024\\nDue Date: 12/15/2024\\nTotal: $1,234.56",
+
+  "allDates": [
+    { "date": "2024-12-01", "context": "next to 'Issue Date:'", "confidence": 95 },
+    { "date": "2024-12-15", "context": "next to 'Due Date:'", "confidence": 90 },
+    { "date": "2024-12-30", "context": "bottom of page, unclear label", "confidence": 40 }
+  ],
+
+  "allAmounts": [
+    { "amount": 1000.00, "context": "Subtotal", "confidence": 95 },
+    { "amount": 234.56, "context": "Tax", "confidence": 95 },
+    { "amount": 1234.56, "context": "Total", "confidence": 98 }
+  ],
+
+  "extractedFields": {
+    "invoiceNumber": "INV-001",
+    "issueDate": "2024-12-01",
+    "dueDate": "2024-12-15",
+    "subtotal": 1000.00,
+    "tax": 234.56,
+    "total": 1234.56
+  },
+
+  "needsClarification": false,
+  "clarificationQuestions": []
 }
 
 IMPORTANT:
-- For receipts/invoices: ALWAYS extract documentDate, vendorName, amount, currency, and fullOcrText
-- For other documents: Set these fields to null if not applicable
-- detectedText: Brief summary of content
-- fullOcrText: Complete verbatim text from image
-- BE SPECIFIC. If you see "República Dominicana" and "Cédula", it's an ID card with high confidence.`
+- allDates: Include EVERY date you see with surrounding context text
+- allAmounts: Include EVERY numerical amount with label/context
+- extractedFields: Your best guess at labeled fields (can be empty {} if unclear)
+- needsClarification: Set to true if multiple dates/amounts are ambiguous
+- clarificationQuestions: List questions to ask user if data is unclear (e.g., "I see 3 dates. Which is the invoice date?")
+- BE COMPREHENSIVE. Extract everything, even if you're not 100% sure what it means.`
             },
             {
               type: 'image_url',
@@ -602,6 +637,13 @@ IMPORTANT:
       analysis.amount = analysis.amount || null;
       analysis.currency = analysis.currency || null;
       analysis.fullOcrText = analysis.fullOcrText || null;
+
+      // NEW: Comprehensive extraction fields
+      analysis.allDates = analysis.allDates || [];
+      analysis.allAmounts = analysis.allAmounts || [];
+      analysis.extractedFields = analysis.extractedFields || {};
+      analysis.needsClarification = analysis.needsClarification || false;
+      analysis.clarificationQuestions = analysis.clarificationQuestions || [];
 
       // Parse documentDate to Date object if provided
       if (analysis.documentDate && typeof analysis.documentDate === 'string') {
@@ -665,6 +707,20 @@ IMPORTANT:
     // =========================================================================
     // SMART SAVE LOGIC
     // =========================================================================
+
+    // Check if clarification is needed (ambiguous dates/amounts)
+    if (analysis.needsClarification) {
+      console.log(`❓ Clarification needed - routing to agent for interactive extraction`);
+
+      // Return analysis for agent to handle clarification dialogue
+      return {
+        action: 'ANALYZED',
+        analysis: analysis,
+        message: null, // Let agent handle interactive clarification
+        skipSave: true,
+        requiresClarification: true
+      };
+    }
 
     if (analysis.confidence >= AUTO_SAVE_CONFIDENCE) {
       // AUTO-SAVE (High confidence)
@@ -992,6 +1048,9 @@ async function saveImageFile(data) {
       amount: analysis.amount || null,
       currency: analysis.currency || 'USD',
       fullOcrText: analysis.fullOcrText || null,
+
+      // Comprehensive Structured Data (comprehensive extraction)
+      structuredData: analysis.extractedFields || {},
 
       // Reply Context Linking
       twilioMessageSid: twilioMessageSid // ← Link to original Twilio message for reply context
