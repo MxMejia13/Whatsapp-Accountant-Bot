@@ -985,7 +985,9 @@ async function executeTool(toolName, args, context) {
             };
           }
 
-          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          // Trim API key to remove any whitespace/newlines that cause header errors
+          const apiKey = process.env.SENDGRID_API_KEY.trim();
+          sgMail.setApiKey(apiKey);
           console.log(`📧 Using SendGrid HTTP API`);
 
           // ===============================================
