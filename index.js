@@ -73,12 +73,12 @@ async function runDiagnostics() {
     detail: r2Status ? 'Endpoint configured' : 'Missing R2 credentials'
   });
 
-  // 5. Resend/SMTP
-  const smtpStatus = !!process.env.SMTP_PASS && !!process.env.SMTP_HOST;
+  // 5. SendGrid Email
+  const sendgridStatus = !!process.env.SENDGRID_API_KEY && !!process.env.SENDGRID_FROM;
   checks.push({
-    service: 'Resend/SMTP',
-    status: smtpStatus,
-    detail: smtpStatus ? 'Email service configured' : 'Missing SMTP credentials'
+    service: 'SendGrid Email',
+    status: sendgridStatus,
+    detail: sendgridStatus ? 'Email service configured' : 'Missing SendGrid API key'
   });
 
   // 6. Server Port
