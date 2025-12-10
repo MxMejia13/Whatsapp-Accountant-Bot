@@ -61,7 +61,7 @@ const MediaFileSchema = new Schema({
 
   // STRUCTURED DATA: Flexible field for comprehensive extraction (invoices, receipts, contracts)
   // Examples: { invoiceNumber: "INV-001", issueDate: "2024-12-01", dueDate: "2024-12-15", lineItems: [...] }
-  structuredData: { type: Object, default: {} }
+  structuredData: { type: Object, default: {} },
 
   // FILE METADATA
   originalName: { type: String }, // Original filename from WhatsApp
