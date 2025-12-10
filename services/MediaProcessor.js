@@ -230,6 +230,7 @@ async function processMedia(options) {
         userId,
         userTitle,
         userMessage,
+        twilioMessageSid,
         isForwarded
       });
     }
@@ -394,6 +395,7 @@ async function processImage(options) {
     userId,
     userTitle,
     userMessage,
+    twilioMessageSid,
     isForwarded
   } = options;
 
